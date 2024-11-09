@@ -1,3 +1,8 @@
+*.wav
+.vscode
+node_modules/
+records/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
