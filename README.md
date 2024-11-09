@@ -13,6 +13,10 @@ EchoAI Helper is a powerful real-time conversation assistant that provides insta
 
 ## ✨ Features
 
+- **Local ASR Support** - CPU-based speech recognition without cloud dependency
+- **Flexible ASR Options** 
+  - Local ASR: FunASR for offline, privacy-focused transcription
+  - Cloud ASR: Optional OpenAI Whisper API integration for enhanced accuracy
 - **Real-time Transcription** - Simultaneous transcription of both microphone input and speaker output
 - **Intelligent Response Generation** - Contextually aware responses powered by OpenAI GPT models
 - **Dual Audio Source Support** - Captures both microphone and system audio simultaneously
@@ -34,8 +38,9 @@ EchoAI Helper is a powerful real-time conversation assistant that provides insta
 https://github.com/user-attachments/assets/0d627e4a-960b-4628-8bbc-8d892f02cfd1
 
 
-## 🆕 New in v1.0.0
+## 🆕 What's NEW
 
+- Added local CPU-based ASR using FunASR - no cloud service required
 - Added FunASR for improved multilingual support
 - Enhanced response generation with context awareness
 - Introduced customizable templates system
