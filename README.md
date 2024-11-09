@@ -30,11 +30,9 @@ EchoAI Helper is a powerful real-time conversation assistant that provides insta
 - Customer service conversation enhancement
 
 ## 🎬 Demo Video
-<div align="center">
-  <a href="https://www.youtube.com/watch?v=RPUAqtXPk8U">
-    <img src="https://img.youtube.com/vi/RPUAqtXPk8U/maxresdefault.jpg" alt="EchoAI Helper Demo"/>
-  </a>
-</div>
+
+https://github.com/user-attachments/assets/0d627e4a-960b-4628-8bbc-8d892f02cfd1
+
 
 ## 🆕 New in v1.0.0
 
