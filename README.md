@@ -29,6 +29,13 @@ EchoAI Helper is a powerful real-time conversation assistant that provides insta
 - Live presentation with AI support
 - Customer service conversation enhancement
 
+## 🎬 Demo Video
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=RPUAqtXPk8U">
+    <img src="https://img.youtube.com/vi/RPUAqtXPk8U/maxresdefault.jpg" alt="EchoAI Helper Demo"/>
+  </a>
+</div>
+
 ## 🆕 New in v1.0.0
 
 - Added FunASR for improved multilingual support
