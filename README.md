@@ -22,7 +22,14 @@ EchoAI Helper is a powerful real-time conversation assistant that provides insta
 - **Export Functionality** - Save conversations in JSON format for future reference
 - **User-friendly Interface** - Clean and intuitive UI built with CustomTkinter
 
-## 🆕 New in 1.0.0
+## 💡 Use Cases
+
+- Real-time meeting transcription and assistance
+- Interview transcription and analysis
+- Live presentation with AI support
+- Customer service conversation enhancement
+
+## 🆕 New in v1.0.0
 
 - Added FunASR for improved multilingual support
 - Enhanced response generation with context awareness
@@ -33,10 +40,13 @@ EchoAI Helper is a powerful real-time conversation assistant that provides insta
 
 ## 🔧 Prerequisites
 
+### Required
 - Python ≥ 3.8.0
-- OpenAI API key (paid account required)
 - FFmpeg
 - Windows OS (Other platforms not fully tested)
+
+### Accounts & API Keys
+- OpenAI API key (paid account required)
 
 ## ⚡ Quick Start
 
@@ -57,7 +67,7 @@ cp .env.example .env
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/yourusername/echoai_helper.git
+git clone https://github.com/colakang/echoai_helper.git
 cd echoai_helper
 ```
 
@@ -127,21 +137,12 @@ python main.py
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## 📞 Contact
 
-EchoAI - [@EchoAI](https://www.echo365.ai)
+- Website: [EchoAI](https://www.echo365.ai)
+- Issues: [GitHub Issues](https://github.com/colakang/echoai_helper/issues)
 
-Project Link: [https://github.com/yourusername/echoai_helper](https://github.com/yourusername/echoai_helper)
+Project Link: [https://github.com/colakang/echoai_helper](https://github.com/colakang/echoai_helper)
 
 ## 🙌 Credits & Inspiration
 
@@ -159,3 +160,8 @@ We've drawn inspiration and learned from these excellent projects:
 
 ### 🤝 Special Thanks
 - [@zixing0131](https://github.com/zixing0131) - For implementing core audio processing components
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+

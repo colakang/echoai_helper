@@ -1,0 +1,8 @@
+{
+    "phrase_timeout": 6.2,
+    "buffer_chunks": 1,
+    "update_interval": 1.0,
+    "system_role": "phone_interview",
+    "case_detail": "none",
+    "knowledge": "ck"
+}

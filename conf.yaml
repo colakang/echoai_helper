@@ -1,0 +1,13 @@
+#ASR_MODEL: "Faster-Whisper"
+ASR_MODEL: "FunASR"
+
+FunASR:
+  model_name: "iic/SenseVoiceSmall" # or "paraformer-zh"
+  #vad_model: "fsmn-vad" # this is only used to make it works if audio is longer than 30s
+  punc_model: "ct-punc" # punctuation model.
+  device: "cpu"
+  ncpu: 4 # number of threads for CPU internal operations.
+  hub: "ms" # ms (default) to download models from ModelScope. Use hf to download models from Hugging Face.
+  use_itn: True
+  language: "en" # zh, en, auto
+
