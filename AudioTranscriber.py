@@ -13,7 +13,6 @@ from datetime import timedelta
 import pyaudiowpatch as pyaudio
 from heapq import merge
 from datetime import datetime
-import simpleaudio as sa
 import time
 from config import AudioConfig
 
