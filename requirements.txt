@@ -11,3 +11,5 @@ funasr
 python-dotenv
 modelscope 
 huggingface_hub
+pytz
+sounddevice
