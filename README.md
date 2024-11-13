@@ -52,6 +52,33 @@ https://github.com/user-attachments/assets/0d627e4a-960b-4628-8bbc-8d892f02cfd1
 - Improved audio buffer management
 - Enhanced UI responsiveness
 
+## 📝 TODO
+
+We're actively working on new features to make EchoAI Helper even better:
+
+### Coming Soon 🚀
+- [ ] Smart sentence completion detection
+ - Auto-detect sentence completeness
+ - Improve transcription accuracy
+ - Optimize response timing
+
+- [ ] Enhanced Software Integration
+ - Transparent overlay support
+ - Easy attachment to any meeting software
+
+- [ ] Installation & Platform Support
+ - [ ] One-click Windows installer
+ - [ ] macOS support (Intel)
+ - [ ] macOS support (Apple Silicon)
+ - [ ] Streamlined setup process
+
+### Future Plans 🔮
+- Cross-platform compatibility optimization
+- Enhanced integration capabilities
+- Performance improvements for various hardware
+
+Want to contribute? Check out our [contribution guidelines](CONTRIBUTING.md)!
+
 ## 🔧 Prerequisites
 
 ### Required
