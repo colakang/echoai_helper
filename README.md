@@ -4,9 +4,12 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-≥3.8-blue.svg)](https://python.org)
 [![OpenAI](https://img.shields.io/badge/OpenAI-API-green.svg)](https://openai.com)
-<a href="https://www.producthunt.com/posts/echoai-interview-copilot?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-echoai&#0045;interview&#0045;copilot" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=601490&theme=light" alt="EchoAI&#0032;Interview&#0032;Copilot&#0032; - Real&#0045;time&#0032;conversation&#0032;with&#0032;LLM&#0032;responses | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
 
 EchoAI Helper is a powerful real-time conversation assistant that provides instant transcription and intelligent responses. It captures both microphone input and speaker output, making it perfect for meetings, interviews, or any scenario where you need real-time conversation analysis.
+
+<p>
+<a href="https://www.producthunt.com/posts/echoai-interview-copilot?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-echoai&#0045;interview&#0045;copilot" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=601490&theme=light" alt="EchoAI&#0032;Interview&#0032;Copilot&#0032; - Real&#0045;time&#0032;conversation&#0032;with&#0032;LLM&#0032;responses | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
+</p>
 
 <p align="center">
 <img width="800" alt="EchoAI Helper Interface" src="https://github.com/colakang/echoai_helper/raw/main/images/ui.png">
