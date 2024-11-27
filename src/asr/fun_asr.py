@@ -37,6 +37,7 @@ class VoiceRecognition(ASRInterface):
             hub=hub,
             device=device,
             punc_model=punc_model,
+            disable_update=True,
             #spk_model="cam++",
         )
         self.sample_rate = sample_rate

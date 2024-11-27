@@ -1,4 +1,4 @@
-#prompts.py
+#src/prompts.py
 
 INITIAL_RESPONSE = "Welcome to EChoAI👋"
 

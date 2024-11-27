@@ -1,0 +1,10 @@
+{
+    "phrase_timeout": 6.2,
+    "buffer_chunks": 1,
+    "update_interval": 1.0,
+    "system_role": "inbound_cs",
+    "case_detail": "none",
+    "knowledge": "none",
+    "window_opacity": 0.8459999999999999,
+    "window_topmost": true
+}

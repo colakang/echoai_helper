@@ -3,27 +3,26 @@
 from datetime import datetime
 import threading
 from tkinter import filedialog, messagebox
-from AudioTranscriber import AudioTranscriber
-from GPTResponder import GPTResponder
 import customtkinter as ctk
-import AudioRecorder 
 import queue
 import time
 import torch
 import sys
-from ResponseManager import ResponseManager
-from SettingsManager import SettingsManager
-from TemplateManager import TemplateManager
-import TranscriberModels
 import subprocess
 import os
 import glob
-from config import EnvConfig, SystemConfig, AudioConfig
-from TranscriptUI import TranscriptUI
 import json
 import tkinter as tk  # 添加这一行
 
-
+import src.AudioRecorder as AudioRecorder
+from src.AudioTranscriber import AudioTranscriber
+from src.GPTResponder import GPTResponder
+from src.ResponseManager import ResponseManager
+from src.SettingsManager import SettingsManager
+from src.TemplateManager import TemplateManager
+import src.TranscriberModels as TranscriberModels
+from src.config import EnvConfig, SystemConfig, AudioConfig
+from src.TranscriptUI import TranscriptUI
 
 
 def validate_phrase_timeout(value):
@@ -264,6 +263,9 @@ def create_ui_components(root, response_manager,transcriber):
     control_frame = ctk.CTkFrame(root)
     control_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=3)
 
+    # 在control_frame创建后添加窗口控制
+    window_controls = create_window_controls(control_frame, root, settings_manager)
+    
     # Clear Transcript按钮
     clear_transcript_button = ctk.CTkButton(
         control_frame, 
@@ -560,6 +562,102 @@ def create_ui_components(root, response_manager,transcriber):
         export_button
     )
 
+def create_window_controls(control_frame, root, settings_manager):
+    """创建窗口控制组件"""
+    window_frame = ctk.CTkFrame(control_frame)
+    window_frame.pack(side="right", padx=10)
+    
+    # 透明度控制
+    opacity_label = ctk.CTkLabel(
+        window_frame,
+        text=f'Opacity: {int(float(settings_manager.get_setting("window_opacity")) * 100)}%',
+        font=("Arial", 12),
+        text_color="#FFFCF2"
+    )
+    opacity_label.pack(side="left", padx=2)
+    
+    def update_opacity(value):
+        opacity = float(value)
+        root.attributes('-alpha', opacity)
+        settings_manager.update_setting("window_opacity", float(value))
+        opacity_label.configure(text=f"Opacity: {int(opacity * 100)}%")
+    
+    # 获取保存的透明度，如果不存在则使用默认值1.0
+    try:
+        saved_opacity = float(settings_manager.get_setting("window_opacity"))
+    except:
+        saved_opacity = 1.0
+        settings_manager.update_setting("window_opacity", saved_opacity)
+    
+    opacity_slider = ctk.CTkSlider(
+        window_frame,
+        from_=0.3,  # 最小透明度设为0.3以保持可用性
+        to=1.0,
+        width=100,
+        command=update_opacity
+    )
+    opacity_slider.set(saved_opacity)
+    opacity_slider.pack(side="left", padx=5)
+    
+    # 置顶按钮
+    try:
+        saved_topmost = bool(settings_manager.get_setting("window_topmost"))
+    except:
+        saved_topmost = False
+        settings_manager.update_setting("window_topmost", saved_topmost)
+    
+    topmost_var = tk.BooleanVar(value=saved_topmost)
+    
+    def toggle_topmost():
+        is_topmost = topmost_var.get()
+        root.attributes('-topmost', is_topmost)
+        settings_manager.update_setting("window_topmost", is_topmost)
+        topmost_button.configure(
+            fg_color="#1B4332" if is_topmost else "#2B2B2B"
+        )
+    
+    topmost_button = ctk.CTkButton(
+        window_frame,
+        text="📌",
+        width=30,
+        command=lambda: [topmost_var.set(not topmost_var.get()), toggle_topmost()]
+    )
+    topmost_button.configure(fg_color="#1B4332" if saved_topmost else "#2B2B2B")
+    topmost_button.pack(side="left", padx=5)
+    
+    # 窗口拖动功能
+    drag_data = {"x": 0, "y": 0, "dragging": False}
+    
+    def start_drag(event):
+        drag_data["dragging"] = True
+        drag_data["x"] = event.x_root - root.winfo_x()
+        drag_data["y"] = event.y_root - root.winfo_y()
+    
+    def stop_drag(event):
+        drag_data["dragging"] = False
+    
+    def do_drag(event):
+        if drag_data["dragging"]:
+            x = event.x_root - drag_data["x"]
+            y = event.y_root - drag_data["y"]
+            root.geometry(f"+{x}+{y}")
+    
+    # 创建一个小的拖动按钮
+    drag_button = ctk.CTkButton(
+        window_frame,
+        text="↕",
+        width=30,
+        command=None
+    )
+    drag_button.pack(side="left", padx=5)
+    
+    # 绑定拖动事件
+    drag_button.bind('<Button-1>', start_drag)
+    drag_button.bind('<B1-Motion>', do_drag)
+    drag_button.bind('<ButtonRelease-1>', stop_drag)
+    
+    return window_frame
+
 def main():
     try:
         # 初始化环境配置
@@ -619,6 +717,19 @@ def main():
         export_button
     ) = create_ui_components(root,response_manager,transcriber)
 
+
+    # 创建设置管理器实例
+    settings_manager = SettingsManager()
+    
+    # 加载窗口设置
+    saved_opacity = settings_manager.get_setting("window_opacity")
+    saved_topmost = settings_manager.get_setting("window_topmost")
+    
+    root.attributes('-alpha', saved_opacity)  # 设置透明度
+    root.attributes('-topmost', saved_topmost)  # 设置置顶状态    
+
+    # 允许窗口在任务栏显示
+    root.wm_attributes('-toolwindow', False)
 
     print("READY")
 

@@ -1,4 +1,6 @@
-import custom_speech_recognition as sr
+#src/AudioRecoreder.py
+
+import src.custom_speech_recognition as sr
 import pyaudiowpatch as pyaudio
 from datetime import datetime
 

@@ -1,4 +1,4 @@
-#AudioTranscriber.py
+#src/AudioTranscriber.py
 
 #import whisper
 import uuid
@@ -7,14 +7,14 @@ import wave
 import os
 import threading
 import tempfile
-import custom_speech_recognition as sr
+import src.custom_speech_recognition as sr
 import io
 from datetime import timedelta
 import pyaudiowpatch as pyaudio
 from heapq import merge
 from datetime import datetime
 import time
-from config import AudioConfig
+from .config import AudioConfig
 
 
 

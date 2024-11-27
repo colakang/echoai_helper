@@ -1,4 +1,4 @@
-# TranscriptUI.py
+# src/TranscriptUI.py
 
 import customtkinter as ctk
 from typing import Optional, Dict, List, Any

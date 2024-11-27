@@ -1,12 +1,11 @@
-##GPTResponder.py
+##src/GPTResponder.py
 
 import threading
 import openai
-from prompts import create_prompt, INITIAL_RESPONSE
+from .prompts import create_prompt, INITIAL_RESPONSE
 import time
 import sys
-from config import SystemConfig
-from config import EnvConfig
+from .config import SystemConfig,EnvConfig
 
 class GPTResponder:
     def __init__(self, response_manager):

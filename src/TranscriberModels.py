@@ -1,11 +1,14 @@
+#src/TranscriberModels.py
+
 import openai
 import yaml
 #import whisper
 #from faster_whisper import WhisperModel
 import os
 import torch
-from asr.asr_factory import ASRFactory
-from asr.asr_interface import ASRInterface
+from src.asr.asr_factory import ASRFactory
+from src.asr.asr_interface import ASRInterface
+from .config import PathConfig
 
 
 def get_model(use_api):
@@ -18,7 +21,7 @@ def get_model(use_api):
 class FunASRTranscriber:
     def __init__(self):
         #self.audio_model = whisper.load_model(os.path.join(os.getcwd(), 'small.pt'))
-        with open("conf.yaml", "rb") as f:
+        with open(f"{PathConfig.get_project_root()}/conf.yaml", "rb") as f:
             self.config = yaml.safe_load(f)
 
         asr_model = "FunASR"

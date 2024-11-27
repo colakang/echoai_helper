@@ -1,9 +1,52 @@
-# config.py
+# src/config.py
 
 import os
 import sys
 from dotenv import load_dotenv
 from typing import Optional
+
+class PathConfig:
+    """路径配置管理"""
+    
+    @staticmethod
+    def get_project_root():
+        """获取项目根目录"""
+        if getattr(sys, 'frozen', False):
+            # 打包后的可执行文件目录
+            return os.path.dirname(sys.executable)
+        else:
+            # 开发环境中的项目根目录 (src的父目录)
+            return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    @staticmethod
+    def get_resource_path():
+        """获取资源文件目录"""
+        if getattr(sys, 'frozen', False):
+            # 打包后的资源目录
+            return os.path.join(sys._MEIPASS, 'resources')
+        else:
+            # 开发环境中的资源目录
+            return os.path.join(PathConfig.get_project_root(), 'resources')
+    
+    @staticmethod
+    def get_config_path():
+        """获取配置文件目录"""
+        return os.path.join(PathConfig.get_resource_path(), 'config')
+    
+    @staticmethod
+    def get_prompt_path():
+        """获取prompt目录"""
+        return os.path.join(PathConfig.get_resource_path(), 'prompt')
+
+    @staticmethod
+    def get_templates_path():
+        """获取模板目录"""
+        return os.path.join(PathConfig.get_resource_path(), 'templates')
+        
+    @staticmethod
+    def get_models_path():
+        """获取模型文件目录"""
+        return os.path.join(PathConfig.get_resource_path(), 'models')
 
 class EnvConfig:
     """环境配置管理类"""
@@ -21,23 +64,16 @@ class EnvConfig:
         """初始化环境配置"""
         if cls._initialized:
             return
-            
-        # 获取程序根目录
-        if getattr(sys, 'frozen', False):
-            # 如果是打包后的可执行文件
-            root_dir = os.path.dirname(sys.executable)
-        else:
-            # 如果是源码运行
-            root_dir = os.path.dirname(os.path.abspath(__file__))
-            
-        env_path = os.path.join(root_dir, '.env')
+        
+        # 获取.env文件路径
+        env_path = os.path.join(PathConfig.get_project_root(), '.env')
         
         # 如果.env文件不存在，创建它
         if not os.path.exists(env_path):
             cls.create_env_template(env_path)
             print(f"Please set your OpenAI API key in {env_path}")
             return
-            
+        
         # 加载.env文件
         load_dotenv(env_path)
         
@@ -46,7 +82,7 @@ class EnvConfig:
             print(f"OPENAI_API_KEY not found in {env_path}")
             print("Please add your OpenAI API key to the .env file")
             return
-            
+        
         cls._initialized = True
     
     @classmethod
@@ -67,22 +103,15 @@ class EnvConfig:
     
     @classmethod
     def get_openai_key(cls) -> Optional[str]:
-        """获取OpenAI API密钥"""
-        # 确保已初始化
         if not cls._initialized:
             cls.initialize()
         return os.getenv('OPENAI_API_KEY')
     
     @classmethod
     def ensure_api_key(cls) -> bool:
-        """确保API密钥已设置且有效"""
         api_key = cls.get_openai_key()
-        if not api_key or api_key == 'your_api_key_here':
-            env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-            print(f"Please set your OpenAI API key in {env_path}")
-            return False
-        return True
-    
+        return bool(api_key and api_key != 'your_api_key_here')
+
 class SystemConfig:
     _instance = None
     _system_role = ""
@@ -98,7 +127,7 @@ class SystemConfig:
 class AudioConfig:
     _instance = None
     _phrase_timeout = 5.2  # 默认值
-    _buffer_chunks = 1  # 默认保存5个chunks
+    _buffer_chunks = 1     # 默认值
 
     @classmethod
     def get_buffer_chunks(cls):
@@ -108,7 +137,7 @@ class AudioConfig:
     def set_buffer_chunks(cls, value):
         try:
             value = int(value)
-            if 0 <= value <= 10:  # 限制chunks数量在0-10之间
+            if 0 <= value <= 10:
                 cls._buffer_chunks = value
                 return True
             return False
