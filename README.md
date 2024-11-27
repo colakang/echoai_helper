@@ -12,7 +12,7 @@ EchoAI Helper is a powerful real-time conversation assistant that provides insta
 </p>
 
 <p align="center">
-<img width="800" alt="EchoAI Helper Interface" src="https://github.com/colakang/echoai_helper/raw/main/images/ui.png">
+<img width="800" alt="EchoAI Helper Interface" src="https://github.com/colakang/echoai_helper/raw/main/resources/images/ui.png">
 </p>
 
 ## ✨ Features

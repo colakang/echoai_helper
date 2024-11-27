@@ -5,6 +5,6 @@
     "system_role": "inbound_cs",
     "case_detail": "none",
     "knowledge": "none",
-    "window_opacity": 0.8459999999999999,
-    "window_topmost": true
+    "window_opacity": 1.0,
+    "window_topmost": false
 }
