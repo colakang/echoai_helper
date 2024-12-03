@@ -115,6 +115,7 @@ class EnvConfig:
 class SystemConfig:
     _instance = None
     _system_role = ""
+    _record_only_mode = False  # Add new class variable for record-only mode
 
     @classmethod
     def get_system_role(cls):
@@ -123,7 +124,20 @@ class SystemConfig:
     @classmethod
     def set_system_role(cls, role):
         cls._system_role = role
+    @classmethod
+    def get_record_only_mode(cls):
+        """Get the current state of record-only mode"""
+        return cls._record_only_mode
 
+    @classmethod
+    def set_record_only_mode(cls, value: bool):
+        """Set the record-only mode state
+        
+        Args:
+            value (bool): True to enable record-only mode, False to disable
+        """
+        cls._record_only_mode = bool(value)
+        
 class AudioConfig:
     _instance = None
     _phrase_timeout = 5.2  # 默认值

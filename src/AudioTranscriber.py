@@ -14,7 +14,7 @@ import pyaudiowpatch as pyaudio
 from heapq import merge
 from datetime import datetime
 import time
-from .config import AudioConfig
+from .config import AudioConfig, SystemConfig
 
 
 
@@ -151,7 +151,9 @@ class AudioTranscriber:
         # 处理新短语的状态更新
         if source_info["new_phrase"]:
             # 如果是用户输入且创建了新的response_id，在所有数据更新完成后触发事件
-            if speaker_type == 'speaker' and response_id:
+            #if speaker_type == 'speaker' and response_id:
+            if speaker_type == 'speaker' and response_id and not SystemConfig.get_record_only_mode():
+    
                 print("Setting transcript_changed_event after data update")
                 self.transcript_changed_event.set()
                 

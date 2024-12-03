@@ -222,170 +222,60 @@ def clear_context(transcriber, audio_queue, transcript_ui):
     transcript_ui.clear()
     print("Context cleared")
 
-def create_ui_components(root, response_manager,transcriber):
+def create_ui_components(root, response_manager, transcriber, audio_queue):
     """创建并配置所有UI组件"""
     # 基础设置
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
     root.title("EchoAI 365 (Helper Mode)")
     root.configure(bg='#252422')
-    root.geometry("1000x600")
+    root.geometry("1200x800")
 
     # 创建设置管理器
     settings_manager = SettingsManager()
+    # 设置更小的组件高度
 
+    button_height = 25  # 减小按钮高度
+    dropdown_height = 25  # 减小下拉菜单高度
     font_size = 20
     
     # 主要内容区域
     transcript_textbox = ctk.CTkTextbox(
         root, 
-        width=250, 
+        width=400, 
         font=("Arial", font_size), 
         text_color='#FFFCF2', 
         wrap="word",
         state="normal"  # 确保可以选择文本
-
     )
-    transcript_textbox.grid(row=0, column=0, padx=10, pady=20, sticky="nsew")
+    transcript_textbox.grid(row=0, column=0, padx=10, pady=(20,10), sticky="nsew")
 
     response_textbox = ctk.CTkTextbox(
         root, 
-        width=400, 
+        width=600, 
         font=("Arial", font_size), 
         text_color='#639cdc', 
         wrap="word",
         state="normal"  # 确保可以选择文本
-
     )
-    response_textbox.grid(row=0, column=1, padx=10, pady=20, sticky="nsew")
+    response_textbox.grid(row=0, column=1, padx=10, pady=(20,10), sticky="nsew")
 
-    # 控制区域框架
-    control_frame = ctk.CTkFrame(root)
-    control_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=3)
+    # 创建main_control_frame时设置较小的padding
+    main_control_frame = ctk.CTkFrame(root, fg_color="#252422")
+    main_control_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10, pady=0)
 
-    # 在control_frame创建后添加窗口控制
-    window_controls = create_window_controls(control_frame, root, settings_manager)
-    
-    # Clear Transcript按钮
-    clear_transcript_button = ctk.CTkButton(
-        control_frame, 
-        text="Clear Transcript", 
-        command=None, 
-        width=120
-    )
-    clear_transcript_button.pack(side="left", padx=(10, 20))
+    # 配置main_control_frame的行高和列宽
+    main_control_frame.grid_rowconfigure(0, minsize=25)  # 原来是weight=1
+    main_control_frame.grid_rowconfigure(1, minsize=25)
+    main_control_frame.grid_rowconfigure(2, minsize=25)
 
-    # Phrase Timeout区域
-    phrase_time_frame = ctk.CTkFrame(control_frame)
-    phrase_time_frame.pack(side="left", padx=5)
-
-    phrase_time_label = ctk.CTkLabel(
-        phrase_time_frame, 
-        text="Phrase Timeout:", 
-        font=("Arial", 12),
-        text_color="#FFFCF2"
-    )
-    phrase_time_label.pack(side="left", padx=2)
-
-    validate_timeout = root.register(validate_phrase_timeout)
-    phrase_time_entry = ctk.CTkEntry(
-        phrase_time_frame,
-        width=70,
-        placeholder_text="0.01-50s",
-        validate="key",
-        validatecommand=(validate_timeout, '%P')
-    )
-    phrase_time_entry.pack(side="left", padx=2)
-    
-    # 使用保存的设置或默认值
-    saved_timeout = settings_manager.get_setting("phrase_timeout")
-    phrase_time_entry.insert(0, str(saved_timeout))
-    AudioConfig.set_phrase_timeout(saved_timeout)
-
-    # Update Timeout按钮（移到phrase_time_frame中）
-    update_button = ctk.CTkButton(
-        phrase_time_frame, 
-        text="Update", 
-        width=80
-    )
-    update_button.pack(side="left", padx=5)
-
-    # Buffer Chunks区域
-    buffer_chunks_frame = ctk.CTkFrame(control_frame)
-    buffer_chunks_frame.pack(side="left", padx=20)
-    
-    buffer_label = ctk.CTkLabel(
-        buffer_chunks_frame, 
-        text="Buffer Chunks:", 
-        font=("Arial", 12),
-        text_color="#FFFCF2"
-    )
-    buffer_label.pack(side="left", padx=2)
-    
-    buffer_options = [str(i) for i in range(11)]
-    saved_buffer = str(settings_manager.get_setting("buffer_chunks"))
-    buffer_var = ctk.StringVar(value=saved_buffer)
-    
-    def on_buffer_change(*args):
-        value = buffer_var.get()
-        settings_manager.update_setting("buffer_chunks", int(value))
-        AudioConfig.set_buffer_chunks(value)
-        buffer_label.configure(text_color="#639cdc")
-        root.after(500, lambda: buffer_label.configure(text_color="#FFFCF2"))
-    
-    buffer_dropdown = ctk.CTkOptionMenu(
-        buffer_chunks_frame,
-        variable=buffer_var,
-        values=buffer_options,
-        width=70,
-        command=lambda _: on_buffer_change()
-    )
-    buffer_dropdown.pack(side="left", padx=2)
-
-    # Freeze按钮
-    freeze_button = ctk.CTkButton(
-        control_frame, 
-        text="Pop Up", 
-        command=None,  # 稍后设置
-        width=100,
-        hover_color="#2B7A0B",  # 添加鼠标悬停效果
-        fg_color="#1B4332"  # 使用不同的颜色以区分其他按钮
-    )
-    freeze_button.pack(side="right", padx=10)
-
-    # Update interval区域
-    update_interval_slider_label = ctk.CTkLabel(
-        root, 
-        text="", 
-        font=("Arial", 12), 
-        text_color="#FFFCF2"
-    )
-    update_interval_slider_label.grid(row=2, column=1, padx=10, pady=3, sticky="nsew")
-
-    saved_interval = settings_manager.get_setting("update_interval")
-    update_interval_slider = ctk.CTkSlider(
-        root, 
-        from_=1, 
-        to=10, 
-        width=300, 
-        height=20, 
-        number_of_steps=9
-    )
-    update_interval_slider.set(saved_interval)
-    update_interval_slider.grid(row=3, column=1, padx=10, pady=10, sticky="nsew")
-
-    # 模板选择区域
+    for i in range(4):
+        main_control_frame.grid_columnconfigure(i, weight=1)
+    # === Column 1: Prompt Templates ===
     system_role_files = TemplateManager.get_template_files('system_role')
     case_detail_files = TemplateManager.get_template_files('case_detail')
     knowledge_files = TemplateManager.get_template_files('knowledge')
     
-    if not all([system_role_files, case_detail_files, knowledge_files]):
-        print("Warning: Some template directories are empty")
-
-    template_frame = ctk.CTkFrame(root)
-    template_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
-
-    # 创建带标签的模板选择下拉菜单
     templates = {
         "System Role": (system_role_files, "system_role"),
         "Case Detail": (case_detail_files, "case_detail"),
@@ -393,37 +283,35 @@ def create_ui_components(root, response_manager,transcriber):
     }
 
     template_vars = {}
-    for i, (label, (options, setting_key)) in enumerate(templates.items()):
-        frame = ctk.CTkFrame(template_frame)
-        frame.grid(row=0, column=i, padx=10, pady=3)
-
+    row = 0
+    for label, (options, setting_key) in templates.items():
         label_widget = ctk.CTkLabel(
-            frame,
+            main_control_frame,
             text=label,
             font=("Arial", 12),
             text_color="#FFFCF2"
         )
-        label_widget.pack(pady=2)
+        label_widget.grid(row=row, column=0, padx=5, pady=2, sticky="w")
 
         saved_value = settings_manager.get_setting(setting_key)
         var = ctk.StringVar(value=saved_value if saved_value in (options or ['default']) else (options or ['default'])[0])
         menu = ctk.CTkOptionMenu(
-            frame,
+            main_control_frame,
             variable=var,
             values=options or ['default'],
-            width=160
+            width=160,
+            height=dropdown_height,  # 新增这行
         )
-        menu.pack(pady=2)
+        menu.grid(row=row, column=0, padx=(80, 5), pady=1, sticky="e")
         template_vars[setting_key] = var
+        row += 1
 
     def on_selection_change(*args):
         """处理模板选择变化"""
         try:
-            # 保存选择
             for key, var in template_vars.items():
                 settings_manager.update_setting(key, var.get())
             
-            # 更新系统角色
             new_role = TemplateManager.update_system_role(
                 template_vars["system_role"].get(),
                 template_vars["case_detail"].get(),
@@ -434,51 +322,15 @@ def create_ui_components(root, response_manager,transcriber):
         except Exception as e:
             print(f"Error updating system role: {e}")
 
-    # 绑定变化事件
     for var in template_vars.values():
         var.trace('w', on_selection_change)
 
-    # 更新按钮的回调函数
-    def update_settings():
-        phrase_timeout = phrase_time_entry.get()
-        if AudioConfig.set_phrase_timeout(phrase_timeout):
-            settings_manager.update_setting("phrase_timeout", float(phrase_timeout))
-            phrase_time_label.configure(text_color="#FFFCF2")
-        else:
-            phrase_time_label.configure(text_color="#FF6B6B")
-
-    update_button.configure(command=update_settings)
-
-    # 配置网格权重
-    root.grid_rowconfigure(0, weight=100)
-    root.grid_rowconfigure(1, weight=1)
-    root.grid_rowconfigure(2, weight=1)
-    root.grid_rowconfigure(3, weight=1)
-    root.grid_rowconfigure(4, weight=1)
-    root.grid_columnconfigure(0, weight=2)
-    root.grid_columnconfigure(1, weight=3)
-
-    # 创建TranscriptUI实例
-    transcript_ui = TranscriptUI(transcript_textbox, response_manager)
-    transcript_ui.add_click_handler(response_textbox)
-
-    # 保存update_interval的回调
-    def on_interval_change(value):
-        settings_manager.update_setting("update_interval", float(value))
-        update_interval_slider_label.configure(
-            text=f"Update interval: {int(float(value))} seconds"
-        )
-
-    update_interval_slider.configure(command=on_interval_change)
-    # 添加导出按钮
+    # === Column 2: Action Buttons ===
     def export_responses():
         """处理导出对话记录的函数"""
         try:
-            # 检查是否有对话数据可导出
-            #transcript_data = transcriber.get_transcript()
             conversation_data = response_manager.export_structured_conversation(
                 transcriber.structured_transcript,
-                #transcript_data,
                 reverse_chronological=False
             )
             
@@ -489,10 +341,8 @@ def create_ui_components(root, response_manager,transcriber):
                 )
                 return
 
-            # 获取当前时间戳用于文件名
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
-            # 使用文件对话框获取保存位置
             filepath = filedialog.asksaveasfilename(
                 defaultextension=".json",
                 initialfile=f"conversation_export_{timestamp}.json",
@@ -500,7 +350,7 @@ def create_ui_components(root, response_manager,transcriber):
                 title="Export Conversation Data"
             )
             
-            if filepath:  # 如果用户没有取消对话框
+            if filepath:
                 success = response_manager.save_structured_conversation(
                     filepath, 
                     conversation_data
@@ -536,78 +386,156 @@ def create_ui_components(root, response_manager,transcriber):
             import traceback
             traceback.print_exc()
 
+    # === Column 2: Action Buttons ===
+    buttons_data = [
+        ("Clear Transcript", lambda: clear_context(transcriber, audio_queue, transcript_ui), "#1f538d"),
+        ("Export Conversation", export_responses, "#1B4332"),
+        ("Pop Up", None, "#1B4332")
+    ]
 
-    # 在control_frame中添加导出按钮，使用新的样式
-    export_button = ctk.CTkButton(
-        control_frame, 
-        text="Export Conversation", 
-        command=export_responses,
-        width=120,
-        hover_color="#2B7A0B",  # 添加鼠标悬停效果
-        fg_color="#1B4332"  # 使用不同的颜色以区分其他按钮
-    )
-    export_button.pack(side="left", padx=(10, 20))
+    # 创建按钮并保存引用
+    clear_transcript_button = None
+    export_button = None
+    freeze_button = None
+    
+    for i, (text, command, color) in enumerate(buttons_data):
+        btn = ctk.CTkButton(
+            main_control_frame,
+            text=text,
+            command=command,
+            width=160,
+            height=button_height,  # 新增这行
+            fg_color=color,
+            hover_color="#2B7A0B",
+        )
+        btn.grid(row=i, column=1, padx=5, pady=1)
+        
+        # 保存按钮引用
+        if text == "Clear Transcript":
+            clear_transcript_button = btn
+        elif text == "Export Conversation":
+            export_button = btn
+        elif text == "Pop Up":
+            freeze_button = btn
 
-    # 返回需要的组件
-    return (
-        transcript_ui,
-        response_textbox,
-        update_interval_slider,
-        update_interval_slider_label,
-        freeze_button,
-        clear_transcript_button,
-        phrase_time_entry,
-        buffer_dropdown,
-        update_button,
-        export_button
-    )
+    # 创建TranscriptUI实例
+    transcript_ui = TranscriptUI(transcript_textbox, response_manager)
+    transcript_ui.add_click_handler(response_textbox)
 
-def create_window_controls(control_frame, root, settings_manager):
-    """创建窗口控制组件"""
-    window_frame = ctk.CTkFrame(control_frame)
-    window_frame.pack(side="right", padx=10)
-    
-    # 透明度控制
-    opacity_label = ctk.CTkLabel(
-        window_frame,
-        text=f'Opacity: {int(float(settings_manager.get_setting("window_opacity")) * 100)}%',
-        font=("Arial", 12),
-        text_color="#FFFCF2"
+    # === Column 3: Configuration Controls ===
+    # Phrase Timeout
+    phrase_time_label = ctk.CTkLabel(
+        main_control_frame,
+        text="Phrase Timeout:",
+        font=("Arial", 12)
     )
-    opacity_label.pack(side="left", padx=2)
+    phrase_time_label.grid(row=0, column=2, padx=5, pady=2, sticky="w")
     
-    def update_opacity(value):
-        opacity = float(value)
-        root.attributes('-alpha', opacity)
-        settings_manager.update_setting("window_opacity", float(value))
-        opacity_label.configure(text=f"Opacity: {int(opacity * 100)}%")
+    validate_cmd = root.register(validate_phrase_timeout)
+    phrase_time_entry = ctk.CTkEntry(
+        main_control_frame,
+        width=70,
+        placeholder_text="0.01-50s",
+        validate="key",
+        validatecommand=(validate_cmd, '%P')
+    )
+    phrase_time_entry.grid(row=0, column=2, padx=(100, 5), pady=2, sticky="w")
+    phrase_time_entry.insert(0, str(settings_manager.get_setting("phrase_timeout")))
     
-    # 获取保存的透明度，如果不存在则使用默认值1.0
-    try:
-        saved_opacity = float(settings_manager.get_setting("window_opacity"))
-    except:
-        saved_opacity = 1.0
-        settings_manager.update_setting("window_opacity", saved_opacity)
+    def update_settings():
+        phrase_timeout = phrase_time_entry.get()
+        if AudioConfig.set_phrase_timeout(phrase_timeout):
+            settings_manager.update_setting("phrase_timeout", float(phrase_timeout))
+            phrase_time_label.configure(text_color="#FFFCF2")
+        else:
+            phrase_time_label.configure(text_color="#FF6B6B")
+            
+    update_button = ctk.CTkButton(
+        main_control_frame,
+        text="Update",
+        width=60,
+        command=update_settings
+    )
+    update_button.grid(row=0, column=2, padx=(180, 5), pady=2, sticky="w")
+
+    # Buffer Chunks
+    buffer_label = ctk.CTkLabel(
+        main_control_frame, 
+        text="Buffer Chunks:",
+        font=("Arial", 12)
+    )
+    buffer_label.grid(row=1, column=2, padx=5, pady=2, sticky="w")
     
-    opacity_slider = ctk.CTkSlider(
-        window_frame,
-        from_=0.3,  # 最小透明度设为0.3以保持可用性
-        to=1.0,
+    buffer_options = [str(i) for i in range(11)]
+    saved_buffer = str(settings_manager.get_setting("buffer_chunks"))
+    buffer_var = ctk.StringVar(value=saved_buffer)
+    
+    def on_buffer_change(value):
+        settings_manager.update_setting("buffer_chunks", int(value))
+        AudioConfig.set_buffer_chunks(value)
+        buffer_label.configure(text_color="#639cdc")
+        root.after(500, lambda: buffer_label.configure(text_color="#FFFCF2"))
+    
+    buffer_dropdown = ctk.CTkOptionMenu(
+        main_control_frame,
+        variable=buffer_var,
+        values=buffer_options,
+        width=70,
+        command=on_buffer_change
+    )
+    buffer_dropdown.grid(row=1, column=2, padx=(100, 5), pady=2, sticky="w")
+
+    # Update Interval
+    interval_label = ctk.CTkLabel(
+        main_control_frame, 
+        text="Update Interval:",
+        font=("Arial", 12)
+    )
+    interval_label.grid(row=2, column=2, padx=5, pady=2, sticky="w")
+    
+    saved_interval = str(int(settings_manager.get_setting("update_interval")))
+    interval_values = [str(i) for i in range(1, 11)]
+    
+    def on_interval_change(value):
+        settings_manager.update_setting("update_interval", float(value))
+    
+    interval_dropdown = ctk.CTkOptionMenu(
+        main_control_frame,
+        values=interval_values,
+        width=70,
+        command=on_interval_change
+    )
+    interval_dropdown.grid(row=2, column=2, padx=(100, 5), pady=2, sticky="w")
+    interval_dropdown.set(saved_interval)
+
+    # === Column 4: Window Controls ===
+    # Create a frame for the first row controls
+    controls_frame = ctk.CTkFrame(main_control_frame, fg_color="transparent")
+    controls_frame.grid(row=0, column=3, padx=5, pady=(2, 0), sticky="w")  # 减少下方padding
+
+    # Record Only Checkbox
+    record_only_var = tk.BooleanVar(value=settings_manager.get_setting("record_only_mode"))
+
+    def toggle_record_only():
+        is_record_only = record_only_var.get()
+        SystemConfig.set_record_only_mode(is_record_only)
+        settings_manager.update_setting("record_only_mode", is_record_only)
+
+    record_only_checkbox = ctk.CTkCheckBox(
+        controls_frame,
+        text="Record Only",
+        variable=record_only_var,
+        command=toggle_record_only,
         width=100,
-        command=update_opacity
+        height=button_height,  # 新增这行
+        checkbox_width=16,
+        checkbox_height=16
     )
-    opacity_slider.set(saved_opacity)
-    opacity_slider.pack(side="left", padx=5)
-    
-    # 置顶按钮
-    try:
-        saved_topmost = bool(settings_manager.get_setting("window_topmost"))
-    except:
-        saved_topmost = False
-        settings_manager.update_setting("window_topmost", saved_topmost)
-    
-    topmost_var = tk.BooleanVar(value=saved_topmost)
-    
+    record_only_checkbox.pack(side="left", padx=(0, 5))  # 减少右侧padding
+
+    # Topmost Button
+    topmost_var = tk.BooleanVar(value=settings_manager.get_setting("window_topmost"))
+
     def toggle_topmost():
         is_topmost = topmost_var.get()
         root.attributes('-topmost', is_topmost)
@@ -615,48 +543,81 @@ def create_window_controls(control_frame, root, settings_manager):
         topmost_button.configure(
             fg_color="#1B4332" if is_topmost else "#2B2B2B"
         )
-    
+
     topmost_button = ctk.CTkButton(
-        window_frame,
+        controls_frame,
         text="📌",
         width=30,
         command=lambda: [topmost_var.set(not topmost_var.get()), toggle_topmost()]
     )
-    topmost_button.configure(fg_color="#1B4332" if saved_topmost else "#2B2B2B")
-    topmost_button.pack(side="left", padx=5)
-    
-    # 窗口拖动功能
+    topmost_button.pack(side="left", padx=0)
+    topmost_button.configure(fg_color="#1B4332" if topmost_var.get() else "#2B2B2B")
+
+    # Opacity Control 
+    saved_opacity = settings_manager.get_setting("window_opacity")
+
+    # 创建一个frame来容纳标签和slider，占用剩余行
+    opacity_frame = ctk.CTkFrame(main_control_frame, fg_color="transparent")
+    opacity_frame.grid(row=1, column=3, rowspan=2, padx=5, pady=(0, 2), sticky="nsew")  # 减少垂直padding
+
+    # 配置opacity_frame的行权重，让滑块区域可以伸展
+    opacity_frame.grid_rowconfigure(0, weight=0)  # label行不伸展
+    opacity_frame.grid_rowconfigure(1, weight=1)  # 滑块行填充剩余空间
+
+    # 添加标签显示标题和当前值
+    opacity_label = ctk.CTkLabel(
+        opacity_frame,
+        text=f"Opacity: {int(saved_opacity * 100)}%",
+        font=("Arial", 12),
+        text_color="#FFFCF2"
+    )
+    opacity_label.grid(row=0, pady=1)  # 减少垂直padding
+
+    def update_opacity(value):
+        opacity = float(value)
+        root.attributes('-alpha', opacity)
+        settings_manager.update_setting("window_opacity", opacity)
+        opacity_label.configure(text=f"Opacity: {int(opacity * 100)}%")
+
+    opacity_slider = ctk.CTkSlider(
+        opacity_frame,
+        from_=0.3,
+        to=1.0,
+        orientation="vertical",
+        height=80,  # 设置一个合理的固定高度        
+        command=update_opacity
+    )
+    opacity_slider.grid(row=1, pady=1, sticky="n")  # 减少底部padding
+    opacity_slider.set(saved_opacity)
+
+    # Window Drag Support
     drag_data = {"x": 0, "y": 0, "dragging": False}
-    
+
     def start_drag(event):
         drag_data["dragging"] = True
         drag_data["x"] = event.x_root - root.winfo_x()
         drag_data["y"] = event.y_root - root.winfo_y()
-    
+
     def stop_drag(event):
         drag_data["dragging"] = False
-    
-    def do_drag(event):
-        if drag_data["dragging"]:
-            x = event.x_root - drag_data["x"]
-            y = event.y_root - drag_data["y"]
-            root.geometry(f"+{x}+{y}")
-    
-    # 创建一个小的拖动按钮
-    drag_button = ctk.CTkButton(
-        window_frame,
-        text="↕",
-        width=30,
-        command=None
+
+    # 移除所有子组件的内部padding
+    for child in root.winfo_children():
+        child.grid_configure(pady=0)
+
+    # 在这里加入return语句
+    return (
+        transcript_ui,
+        response_textbox,
+        interval_dropdown,
+        interval_label,
+        freeze_button,
+        clear_transcript_button,
+        phrase_time_entry,
+        buffer_dropdown,
+        update_button,
+        export_button  # 添加这个
     )
-    drag_button.pack(side="left", padx=5)
-    
-    # 绑定拖动事件
-    drag_button.bind('<Button-1>', start_drag)
-    drag_button.bind('<B1-Motion>', do_drag)
-    drag_button.bind('<ButtonRelease-1>', stop_drag)
-    
-    return window_frame
 
 def main():
     try:
@@ -712,10 +673,10 @@ def main():
         freeze_button,
         clear_transcript_button,
         phrase_time_entry,
-        buffer_dropdown,  # 接收dropdown
+        buffer_dropdown,
         update_button,
         export_button
-    ) = create_ui_components(root,response_manager,transcriber)
+    ) = create_ui_components(root, response_manager, transcriber, audio_queue)
 
 
     # 创建设置管理器实例
@@ -726,17 +687,17 @@ def main():
     saved_topmost = settings_manager.get_setting("window_topmost")
     
     root.attributes('-alpha', saved_opacity)  # 设置透明度
-    root.attributes('-topmost', saved_topmost)  # 设置置顶状态    
+    root.attributes('-topmost', saved_topmost)  # 设置置顶状态   
+    
+    SystemConfig.set_record_only_mode(settings_manager.get_setting("record_only_mode"))
+ 
 
     # 允许窗口在任务栏显示
     root.wm_attributes('-toolwindow', False)
 
     print("READY")
-
-    root.grid_rowconfigure(0, weight=100)
-    root.grid_rowconfigure(1, weight=1)
-    root.grid_rowconfigure(2, weight=1)
-    root.grid_rowconfigure(3, weight=1)
+    root.grid_rowconfigure(0, weight=85)  # 主内容区域占70%
+    root.grid_rowconfigure(1, weight=15)  # 控制区域占30%
     root.grid_columnconfigure(0, weight=2)
     root.grid_columnconfigure(1, weight=3)
 
