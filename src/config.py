@@ -53,6 +53,9 @@ class EnvConfig:
     
     _instance = None
     _initialized = False
+    _llm_provider = "openai"  # Default LLM provider
+    _llm_api_base_url = None  # Default API base URL (optional)
+    _llm_model_name = "gpt-4o-mini"  # Default model name
     
     def __new__(cls):
         if cls._instance is None:
@@ -77,9 +80,14 @@ class EnvConfig:
         # 加载.env文件
         load_dotenv(env_path)
         
+        # Load LLM configuration from environment variables
+        cls._llm_provider = os.getenv('LLM_PROVIDER', cls._llm_provider)
+        cls._llm_api_base_url = os.getenv('LLM_API_BASE_URL', cls._llm_api_base_url)
+        cls._llm_model_name = os.getenv('LLM_MODEL_NAME', cls._llm_model_name)
+
         # 验证API密钥
-        if not os.getenv('OPENAI_API_KEY'):
-            print(f"OPENAI_API_KEY not found in {env_path}")
+        if cls._llm_provider == "openai" and not os.getenv('OPENAI_API_KEY'):
+            print(f"OPENAI_API_KEY not found in {env_path} (required for OpenAI provider)")
             print("Please add your OpenAI API key to the .env file")
             return
         
@@ -91,6 +99,14 @@ class EnvConfig:
         template = (
             "# OpenAI API Configuration\n"
             "OPENAI_API_KEY=your_api_key_here\n"
+            "\n"
+            "# LLM Configuration (Optional)\n"
+            "# LLM_PROVIDER: The LLM provider to use (e.g., 'openai', 'custom'). Default: 'openai'\n"
+            "LLM_PROVIDER=openai\n"
+            "# LLM_API_BASE_URL: Custom API base URL for the LLM provider (e.g., for local LLMs). Optional.\n"
+            "# LLM_API_BASE_URL=\n"
+            "# LLM_MODEL_NAME: The specific model name to use. Default: 'gpt-4o-mini'\n"
+            "LLM_MODEL_NAME=gpt-4o-mini\n"
             "\n"
             "# Add other configuration variables below\n"
         )
@@ -106,11 +122,33 @@ class EnvConfig:
         if not cls._initialized:
             cls.initialize()
         return os.getenv('OPENAI_API_KEY')
+
+    @classmethod
+    def get_llm_provider(cls) -> str:
+        if not cls._initialized:
+            cls.initialize()
+        return cls._llm_provider
+
+    @classmethod
+    def get_llm_api_base_url(cls) -> Optional[str]:
+        if not cls._initialized:
+            cls.initialize()
+        return cls._llm_api_base_url
+
+    @classmethod
+    def get_llm_model_name(cls) -> str:
+        if not cls._initialized:
+            cls.initialize()
+        return cls._llm_model_name
     
     @classmethod
     def ensure_api_key(cls) -> bool:
-        api_key = cls.get_openai_key()
-        return bool(api_key and api_key != 'your_api_key_here')
+        # This check is now more nuanced; depends on the provider
+        if cls.get_llm_provider() == "openai":
+            api_key = cls.get_openai_key()
+            return bool(api_key and api_key != 'your_api_key_here')
+        # For other providers, API key might not be 'OPENAI_API_KEY' or might not be required
+        return True
 
 class SystemConfig:
     _instance = None
