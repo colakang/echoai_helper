@@ -2,7 +2,7 @@
 ASR_MODEL: "FunASR"
 
 FunASR:
-  model_name: "iic/SenseVoiceSmall" # or "paraformer-zh"
+  model_name: "iic/SenseVoiceSmall" # or "paraformer-zh" or "iic/SenseVoiceSmall" or "FunAudioLLM/Fun-ASR-Nano-2512"
   #vad_model: "fsmn-vad" # this is only used to make it works if audio is longer than 30s
   punc_model: "ct-punc" # punctuation model.
   device: "cpu"

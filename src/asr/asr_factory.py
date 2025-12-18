@@ -29,7 +29,8 @@ class ASRFactory:
                 hub=kwargs.get("hub"),
                 device=kwargs.get("device"),
                 language=kwargs.get("language"),
-                use_itn=kwargs.get("use_itn"),
+                #use_itn=kwargs.get("use_itn"),
+                itn=kwargs.get("use_itn"),
                 # sample_rate=kwargs.get("sample_rate"),
             )
         elif system_name == "AzureASR":
