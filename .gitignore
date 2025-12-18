@@ -1,8 +1,13 @@
 *.wav
 .vscode
+.claude/
 node_modules/
 records/
 .git/
+
+# Prompt template files
+resources/prompt/case_detail/*.txt
+resources/prompt/knowledge/*.txt
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

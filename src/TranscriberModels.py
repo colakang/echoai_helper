@@ -49,6 +49,15 @@ class FunASRTranscriber:
             return ''
         return result
 
+    def get_transcription_np(self, audio_data):
+        """Directly transcribe numpy array audio data without temporary file"""
+        try:
+            result = self.audio_model.transcribe_np(audio_data)
+        except Exception as e:
+            print(e)
+            return ''
+        return result
+
 
 class WhisperTranscriber:
 

@@ -18,18 +18,20 @@ class VoiceRecognition(ASRInterface):
 
     def __init__(
         self,
-        model_name: str = "iic/SenseVoiceSmall",
+        model_name: str = "FunAudioLLM/Fun-ASR-Nano-2512",
         language: str = "auto",
         #vad_model: str = "fsmn-vad",
         vad_model = None,
         punc_model=None,
         ncpu: int = None,
         hub: str = None,
+        trust_remote_code: bool = False,
         device: str = "cpu",
         sample_rate: int = 16000,
-        use_itn: bool = False,
+        #use_itn: bool = False,
+        itn: bool = True,
     ) -> None:
-        
+
         self.model = AutoModel(
             model=model_name,
             vad_model=vad_model,
@@ -38,10 +40,12 @@ class VoiceRecognition(ASRInterface):
             device=device,
             punc_model=punc_model,
             disable_update=True,
+            trust_remote_code=trust_remote_code,
             #spk_model="cam++",
         )
         self.sample_rate = sample_rate
-        self.use_itn = use_itn
+        #self.use_itn = use_itn
+        self.itn = itn
         self.language = language
 
         self.asr_with_vad = None
@@ -58,7 +62,8 @@ class VoiceRecognition(ASRInterface):
         res = self.model.generate(
             input=audio,
             batch_size_s=300,
-            use_itn=self.use_itn,
+            #use_itn=self.use_itn,
+            itn=self.itn,
             language=self.language,
         )
         
@@ -76,13 +81,13 @@ class VoiceRecognition(ASRInterface):
         return full_text.strip()
 
     def transcribe_np(self, audio: np.ndarray) -> str:
-        
+
         audio_tensor = torch.tensor(audio, dtype=torch.float32)
-        
+
         res = self.model.generate(
             input=audio_tensor,
             batch_size_s=300,
-            use_itn=self.use_itn,
+            itn=self.itn,
             language=self.language,
         )
         

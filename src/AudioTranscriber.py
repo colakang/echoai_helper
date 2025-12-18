@@ -2,7 +2,6 @@
 
 #import whisper
 import uuid
-import torch
 import wave
 import os
 import threading
@@ -15,6 +14,9 @@ from heapq import merge
 from datetime import datetime
 import time
 from .config import AudioConfig, SystemConfig
+import torch
+import numpy as np
+from scipy import signal
 
 
 
@@ -70,14 +72,14 @@ class AudioTranscriber:
             source_info = self.audio_sources[who_spoke]
             text = ''
             try:
-                fd, path = tempfile.mkstemp(suffix=".wav")
-                os.close(fd)
-                source_info["process_data_func"](source_info["saved_sample"], path)
-                text = self.audio_model.get_transcription(path)
+                # Phase 1: Direct numpy conversion without temporary file
+                audio_np = self.convert_bytes_to_numpy(source_info["saved_sample"], who_spoke)
+                text = self.audio_model.get_transcription_np(audio_np)
             except Exception as e:
-                print(e)
-            finally:
-                os.unlink(path)
+                print(f"Error in transcription: {e}")
+                import traceback
+                traceback.print_exc()
+
             if text != '' and text.lower() != 'you':
                 print("Catching: "+ text+"\n")
                 ## if text is end of 指定符号，则设定为new phrase
@@ -120,6 +122,50 @@ class AudioTranscriber:
             wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
             wf.setframerate(self.audio_sources["Speaker"]["sample_rate"])
             wf.writeframes(data)
+
+    def convert_bytes_to_numpy(self, audio_bytes, who_spoke):
+        """Convert raw audio bytes to numpy array for direct ASR processing"""
+        source_info = self.audio_sources[who_spoke]
+        target_sample_rate = 16000  # FunASR expects 16kHz
+
+        if who_spoke == "You":
+            # For microphone data, use sr.AudioData conversion
+            audio_data = sr.AudioData(
+                audio_bytes,
+                source_info["sample_rate"],
+                source_info["sample_width"]
+            )
+            wav_bytes = audio_data.get_wav_data()
+            # Convert WAV bytes to numpy array
+            wav_io = io.BytesIO(wav_bytes)
+            with wave.open(wav_io, 'rb') as wf:
+                frames = wf.readframes(wf.getnframes())
+                audio_np = np.frombuffer(frames, dtype=np.int16)
+        else:
+            # For speaker data, direct PCM conversion
+            # Raw PCM bytes -> int16 array
+            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+
+            # Convert stereo to mono if needed
+            if source_info["channels"] == 2:
+                # Reshape to (samples, 2) and average channels
+                try:
+                    audio_np = audio_np.reshape(-1, 2)
+                    audio_np = audio_np.mean(axis=1).astype(np.int16)
+                except Exception as e:
+                    print(f"[ERROR] Failed to convert stereo to mono: {e}")
+                    # Fallback: just take one channel
+                    audio_np = audio_np[::2]
+
+            # Resample if needed (Speaker is usually 48kHz, needs to be 16kHz for FunASR)
+            if source_info["sample_rate"] != target_sample_rate:
+                num_samples = int(len(audio_np) * target_sample_rate / source_info["sample_rate"])
+                audio_np = signal.resample(audio_np, num_samples).astype(np.int16)
+
+        # Convert to float32 and normalize to [-1, 1] range (required by FunASR)
+        audio_np = audio_np.astype(np.float32) / 32768.0
+
+        return audio_np
 
     def update_transcript(self, who_spoke, text, time_spoken):
         source_info = self.audio_sources[who_spoke]
