@@ -11,3 +11,77 @@ FunASR:
   use_itn: True
   language: "en" # zh, en, auto
 
+# ============================================================================
+# LLM Configuration
+# ============================================================================
+# Supported providers: "openai" or "litellm"
+# - openai: Uses OpenAI API (GPT-4, GPT-3.5)
+# - litellm: Supports 100+ providers (Gemini, Ollama, Claude, etc.)
+# ============================================================================
+
+LLM:
+  # Choose provider: "openai" or "litellm"
+  provider: "openai"
+
+  # ----------------------------------------------------------------------------
+  # OpenAI Configuration
+  # ----------------------------------------------------------------------------
+  openai:
+    model: "gpt-4o-mini"  # Options: gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-3.5-turbo
+    # API key is loaded from environment variable OPENAI_API_KEY
+
+  # ----------------------------------------------------------------------------
+  # LiteLLM Configuration (supports multiple backends)
+  # ----------------------------------------------------------------------------
+  litellm:
+    # Examples:
+
+    # Google Gemini (Fast & Cheap)
+    model: "gemini/gemini-1.5-flash"
+    api_key: ""  # Set your Gemini API key here or use GEMINI_API_KEY env var
+
+    # Google Gemini Pro (High Quality, 2M context)
+    # model: "gemini/gemini-1.5-pro"
+    # api_key: ""
+
+    # Ollama - Local LLM (FREE, requires Ollama running)
+    # model: "ollama/gemma2:2b"  # or llama3, qwen, etc.
+    # api_base: "http://localhost:11434"
+
+    # Claude (Anthropic)
+    # model: "claude-3-haiku-20240307"
+    # api_key: ""  # Set your Anthropic API key
+
+    # LM Studio - Local LLM
+    # model: "local-model"
+    # api_base: "http://localhost:1234/v1"
+
+    # Azure OpenAI
+    # model: "azure/gpt-4"
+    # api_key: ""
+    # api_base: "https://your-resource.openai.azure.com/"
+    # api_version: "2023-05-15"
+
+# ============================================================================
+# Quick Start Examples:
+# ============================================================================
+#
+# 1. Use OpenAI (default):
+#    provider: "openai"
+#    Set environment: OPENAI_API_KEY=sk-...
+#
+# 2. Use Google Gemini (free tier available):
+#    provider: "litellm"
+#    model: "gemini/gemini-1.5-flash"
+#    api_key: "YOUR_GEMINI_KEY"
+#
+# 3. Use Ollama (100% free, local):
+#    - Install Ollama: https://ollama.com
+#    - Run: ollama pull gemma2:2b
+#    - Config:
+#      provider: "litellm"
+#      model: "ollama/gemma2:2b"
+#      api_base: "http://localhost:11434"
+#
+# ============================================================================
+

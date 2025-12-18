@@ -9,7 +9,12 @@ torch
 torchaudio
 funasr
 python-dotenv
-modelscope 
+modelscope
 huggingface_hub
 pytz
 sounddevice
+scipy
+
+# LLM Provider Support
+pyyaml
+litellm  # Supports 100+ LLM providers (Gemini, Ollama, Claude, etc.)
