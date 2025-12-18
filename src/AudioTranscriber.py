@@ -25,7 +25,7 @@ MAX_PHRASE_TIMEOUT = 30.2
 MAX_PHRASES = 9999
 
 class AudioTranscriber:
-    def __init__(self, mic_source, speaker_source, model, response_manager):
+    def __init__(self, mic_source, speaker_source, model, response_manager, streaming_mode=False):
         # 添加response_manager
         self.response_manager = response_manager
         self.transcript_data = {"You": [], "Speaker": []}
@@ -33,10 +33,23 @@ class AudioTranscriber:
             "you": [],      # [(text, timestamp, response_id), ...]
             "speaker": [],  # [(text, timestamp, response_id), ...]
             "combined": []  # [(text, timestamp, response_id, speaker_type), ...]
-        }        
+        }
         self.len_speaker = 0
         self.transcript_changed_event = threading.Event()
         self.audio_model = model
+
+        # Phase 2: Thread safety for shared model
+        self.model_lock = threading.Lock()  # Ensure serial model inference
+
+        # Phase 2: Per-source data locks for thread-safe buffer operations
+        self.source_locks = {
+            "You": threading.Lock(),
+            "Speaker": threading.Lock()
+        }
+
+        # Future: Streaming mode support (reserved interface)
+        self.streaming_mode = streaming_mode
+
         self.audio_sources = {
             "You": {
                 "sample_rate": mic_source.SAMPLE_RATE,
@@ -65,33 +78,59 @@ class AudioTranscriber:
         }
 
     def transcribe_audio_queue(self, audio_queue):
+        """
+        Phase 2: Dual-queue support with thread-safe model access.
+        This method can be called by multiple threads, each processing its own queue.
+        """
         while True:
-            #print("Debug: "+ "-----" +"\n")
             who_spoke, data, time_spoken = audio_queue.get()
-            self.update_last_sample_and_phrase_status(who_spoke, data, time_spoken)
-            source_info = self.audio_sources[who_spoke]
+
+            # Phase 2: Thread-safe buffer update
+            with self.source_locks[who_spoke]:
+                self.update_last_sample_and_phrase_status(who_spoke, data, time_spoken)
+                source_info = self.audio_sources[who_spoke]
+                # Copy saved_sample for processing (avoid holding lock during inference)
+                audio_data = source_info["saved_sample"]
+
             text = ''
             try:
-                # Phase 1: Direct numpy conversion without temporary file
-                audio_np = self.convert_bytes_to_numpy(source_info["saved_sample"], who_spoke)
-                text = self.audio_model.get_transcription_np(audio_np)
+                # Phase 1: Convert audio bytes to numpy (preprocessing, no lock needed)
+                audio_np = self.convert_bytes_to_numpy(audio_data, who_spoke)
+
+                # Phase 2: Thread-safe model inference (shared model, serial execution)
+                with self.model_lock:
+                    text = self._transcribe_audio(audio_np)
+
             except Exception as e:
                 print(f"Error in transcription: {e}")
                 import traceback
                 traceback.print_exc()
 
-            if text != '' and text.lower() != 'you':
-                print("Catching: "+ text+"\n")
-                ## if text is end of 指定符号，则设定为new phrase
-                if (source_info["first_spoken"] and time_spoken - source_info["first_spoken"] > timedelta(seconds=AudioConfig.get_phrase_timeout())) :
-                    print ("new phrase......\n")
-                    source_info["new_phrase"] = True
-                    #if who_spoke.lower() == 'speaker':
-                        #self.transcript_changed_event.set()
-                self.update_transcript(who_spoke, text, time_spoken)
-            else:
-                print("\r "+who_spoke+" text: Null, New_Phrase:"+str(source_info["new_phrase"])+"\r\n")
-                #self.transcript_changed_event.wait(1.5)
+            # Phase 2: Thread-safe result processing
+            with self.source_locks[who_spoke]:
+                source_info = self.audio_sources[who_spoke]
+                if text != '' and text.lower() != 'you':
+                    print("Catching: "+ text+"\n")
+                    ## if text is end of 指定符号，则设定为new phrase
+                    if (source_info["first_spoken"] and time_spoken - source_info["first_spoken"] > timedelta(seconds=AudioConfig.get_phrase_timeout())) :
+                        print ("new phrase......\n")
+                        source_info["new_phrase"] = True
+                    self.update_transcript(who_spoke, text, time_spoken)
+                else:
+                    print("\r "+who_spoke+" text: Null, New_Phrase:"+str(source_info["new_phrase"])+"\r\n")
+
+    def _transcribe_audio(self, audio_np):
+        """
+        Modularized transcription method for future streaming compatibility.
+        In streaming mode, this will handle chunk-based processing.
+        """
+        if self.streaming_mode:
+            # Future: Streaming implementation
+            # return self._transcribe_streaming(audio_np)
+            raise NotImplementedError("Streaming mode not yet implemented")
+        else:
+            # Current: Accumulate mode
+            return self.audio_model.get_transcription_np(audio_np)
 
     def update_last_sample_and_phrase_status(self, who_spoke, data, time_spoken):
         source_info = self.audio_sources[who_spoke]

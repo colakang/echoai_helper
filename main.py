@@ -6,7 +6,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import queue
 import time
-import torch
+
 import sys
 import subprocess
 import os
@@ -23,7 +23,7 @@ from src.TemplateManager import TemplateManager
 import src.TranscriberModels as TranscriberModels
 from src.config import EnvConfig, SystemConfig, AudioConfig
 from src.TranscriptUI import TranscriptUI
-
+#import torch
 
 def validate_phrase_timeout(value):
     try:
@@ -208,22 +208,24 @@ def clear_context_(transcriber, audio_queue):
     with audio_queue.mutex:
         audio_queue.queue.clear()
 
-def clear_context(transcriber, audio_queue, transcript_ui):
+def clear_context(transcriber, mic_queue, speaker_queue, transcript_ui):
     """
-    清除所有上下文
+    Phase 2: 清除所有上下文（双队列版本）
     """
     print("Clearing context...")
     # 清除transcriber数据
     transcriber.clear_transcript_data()
-    # 清除音频队列
-    with audio_queue.mutex:
-        audio_queue.queue.clear()
+    # Phase 2: 清除两个音频队列
+    with mic_queue.mutex:
+        mic_queue.queue.clear()
+    with speaker_queue.mutex:
+        speaker_queue.queue.clear()
     # 清除UI显示
     transcript_ui.clear()
     print("Context cleared")
 
-def create_ui_components(root, response_manager, transcriber, audio_queue):
-    """创建并配置所有UI组件"""
+def create_ui_components(root, response_manager, transcriber, mic_queue, speaker_queue):
+    """Phase 2: 创建并配置所有UI组件（双队列版本）"""
     # 基础设置
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
@@ -388,7 +390,7 @@ def create_ui_components(root, response_manager, transcriber, audio_queue):
 
     # === Column 2: Action Buttons ===
     buttons_data = [
-        ("Clear Transcript", lambda: clear_context(transcriber, audio_queue, transcript_ui), "#1f538d"),
+        ("Clear Transcript", lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui), "#1f538d"),
         ("Export Conversation", export_responses, "#1B4332"),
         ("Pop Up", None, "#1B4332")
     ]
@@ -635,25 +637,34 @@ def main():
         return
 
     TemplateManager.ensure_template_directories()
-    audio_queue = queue.Queue()
+
+    # Phase 2: Dual-queue architecture for full-duplex processing
+    mic_queue = queue.Queue()
+    speaker_queue = queue.Queue()
 
     user_audio_recorder = AudioRecorder.DefaultMicRecorder()
-    user_audio_recorder.record_into_queue(audio_queue)
+    user_audio_recorder.record_into_queue(mic_queue)
 
     time.sleep(2)
 
     speaker_audio_recorder = AudioRecorder.DefaultSpeakerRecorder()
-    speaker_audio_recorder.record_into_queue(audio_queue)
+    speaker_audio_recorder.record_into_queue(speaker_queue)
 
     model = TranscriberModels.get_model('--api' in sys.argv)
 
     # 创建ResponseManager实例
     response_manager = ResponseManager()
 
-    transcriber = AudioTranscriber(user_audio_recorder.source, speaker_audio_recorder.source, model,response_manager)
-    transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(audio_queue,))
-    transcribe.daemon = True
-    transcribe.start()
+    transcriber = AudioTranscriber(user_audio_recorder.source, speaker_audio_recorder.source, model, response_manager)
+
+    # Phase 2: Dual-thread transcription (shared model, independent queues)
+    mic_transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(mic_queue,), name="MicTranscriber")
+    mic_transcribe.daemon = True
+    mic_transcribe.start()
+
+    speaker_transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(speaker_queue,), name="SpeakerTranscriber")
+    speaker_transcribe.daemon = True
+    speaker_transcribe.start()
 
     responder = GPTResponder(response_manager)
     respond = threading.Thread(target=responder.respond_to_transcriber, args=(transcriber,))
@@ -666,17 +677,17 @@ def main():
 
     root = ctk.CTk()
     (
-        transcript_ui, 
-        response_textbox, 
-        update_interval_slider, 
-        update_interval_slider_label, 
+        transcript_ui,
+        response_textbox,
+        update_interval_slider,
+        update_interval_slider_label,
         freeze_button,
         clear_transcript_button,
         phrase_time_entry,
         buffer_dropdown,
         update_button,
         export_button
-    ) = create_ui_components(root, response_manager, transcriber, audio_queue)
+    ) = create_ui_components(root, response_manager, transcriber, mic_queue, speaker_queue)
 
 
     # 创建设置管理器实例
@@ -702,7 +713,7 @@ def main():
     root.grid_columnconfigure(1, weight=3)
 
     clear_transcript_button.configure(
-        command=lambda: clear_context(transcriber, audio_queue, transcript_ui)
+        command=lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui)
     )
     def show_popup():
         try:
