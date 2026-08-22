@@ -14,7 +14,14 @@ FunASR:
   ncpu: 4 # number of threads for CPU internal operations (ignored on mps/cuda).
   hub: "ms" # ms (default) to download models from ModelScope. Use hf to download models from Hugging Face.
   use_itn: True
-  language: "en" # zh, en, auto
+  # "auto", not a fixed language. SenseVoice detects zh/yue/en/ja/ko per
+  # utterance, and pinning it mistranslates everything else: on a real
+  # Cantonese call, language "en" turned 「哦，五三係嘛，請問你電話號碼幾多咧？」
+  # into "o hi guess question." and 5.8s of speech into the single word
+  # "some" -- the model forces the syllables onto English words.
+  # Measured on that same audio, "auto" is also faster than pinning the
+  # correct language (RTF 0.015 vs 0.025) and no less accurate.
+  language: "auto" # zh, en, yue, ja, ko, auto
 
 # ============================================================================
 # LLM Configuration

@@ -61,8 +61,20 @@ class SegmenterConfig:
     # trigger. 700ms is a guess pending calibration on real speech.
     min_silence_ms: int = 700
 
-    # Utterances shorter than this are noise, not speech.
-    min_speech_ms: int = 250
+    # Utterances shorter than this are dropped. Two reasons to keep it high:
+    #
+    # 1. SenseVoice's automatic language detection is unreliable on very short
+    #    audio. On a real Cantonese call, sub-second segments came back as
+    #    Japanese -- 'ですてま。', 'え。' -- because there is not enough signal
+    #    to identify the language. Raising this from 250ms to 900ms took the
+    #    misdetections on that recording from 2 to 0.
+    # 2. In a meeting, sub-second utterances are mostly backchannel ("yeah",
+    #    "嗯", "对") that adds noise to a transcript rather than content.
+    #
+    # The cost is real: on that same call it also dropped the customer
+    # reciting a phone number in 0.7-1.1s bursts. Lower it for fast
+    # turn-taking material where short replies carry information.
+    min_speech_ms: int = 700
 
     # Keep a little audio either side of the detected boundary: VAD trips
     # slightly late on onsets and slightly early on trailing consonants, and
