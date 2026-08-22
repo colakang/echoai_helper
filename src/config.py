@@ -48,6 +48,26 @@ class PathConfig:
         """获取模型文件目录"""
         return os.path.join(PathConfig.get_resource_path(), 'models')
 
+    @staticmethod
+    def get_user_config_path():
+        """
+        Where this user's own settings live.
+
+        Deliberately outside the repo. resources/config/settings.json is
+        tracked in git but was being rewritten on every change, so one
+        person's window opacity and mode showed up as a diff, and committing
+        it pushed their preferences to everyone. That file is now the shipped
+        default, read once and never written.
+        """
+        if sys.platform == "darwin":
+            base = os.path.expanduser("~/Library/Application Support")
+        elif sys.platform == "win32":
+            base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        else:
+            base = os.environ.get(
+                "XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+        return os.path.join(base, "EchoAI Helper")
+
 class EnvConfig:
     """环境配置管理类"""
     
@@ -196,6 +216,17 @@ class AudioConfig:
     @classmethod
     def set_live_partials(cls, value: bool):
         cls._live_partials = bool(value)
+
+    # Which named profile is current. See src/profiles.py.
+    _profile = "meeting"
+
+    @classmethod
+    def get_profile(cls):
+        return cls._profile
+
+    @classmethod
+    def set_profile(cls, key: str):
+        cls._profile = key
 
     @classmethod
     def get_buffer_chunks(cls):

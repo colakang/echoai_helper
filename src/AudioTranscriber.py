@@ -186,6 +186,18 @@ class AudioTranscriber:
     def _is_usable(text) -> bool:
         return bool(text) and text.strip() != ""
 
+    def apply_segmenter_config(self, config) -> None:
+        """
+        Swap segmentation settings on a running transcriber.
+
+        Applied to the live objects rather than by rebuilding them: a
+        segmenter holds the audio of the utterance in progress, and replacing
+        it mid-sentence would drop whatever has been spoken so far.
+        """
+        for name, segmenter in self.segmenters.items():
+            with self.source_locks[name]:
+                segmenter.config = config
+
     def _transcribe_audio(self, audio_np):
         """
         Modularized transcription method for future streaming compatibility.

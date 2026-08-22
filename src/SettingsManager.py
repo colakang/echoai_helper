@@ -9,6 +9,15 @@ class SettingsManager:
     """管理应用程序设置的保存和加载"""
     
     DEFAULT_SETTINGS = {
+        # Segmentation is driven by the VAD now. "profile" selects a bundle of
+        # settings (see src/profiles.py); min_silence_ms is the one knob from
+        # that bundle the UI exposes on its own.
+        "profile": "meeting",
+        "min_silence_ms": 700,
+        # Retained so older settings.json files still load without warnings.
+        # Nothing reads them: phrase_timeout and buffer_chunks belonged to the
+        # accumulate loop that the segmenter replaced, and update_interval was
+        # stored by the responder but never used.
         "phrase_timeout": 5.2,
         "buffer_chunks": 1,
         "update_interval": 2,
@@ -22,41 +31,35 @@ class SettingsManager:
     
     def __init__(self):
         """初始化设置管理器"""
-        # 使用PathConfig获取配置目录
-        self.config_dir = PathConfig.get_config_path()
+        # User settings live outside the repo; see PathConfig.get_user_config_path.
+        self.config_dir = PathConfig.get_user_config_path()
         os.makedirs(self.config_dir, exist_ok=True)
-        
-        # 设置文件的完整路径
         self.settings_file = os.path.join(self.config_dir, "settings.json")
-        
-        # 尝试从旧位置迁移设置
+
+        # Shipped defaults, read-only.
+        self.defaults_file = os.path.join(
+            PathConfig.get_config_path(), "settings.json")
+
         self._migrate_old_settings()
-        
-        # 加载设置
         self.settings = self.load_settings()
-        
+
         if self.debug_mode:
             print(f"Settings file location: {self.settings_file}")
-    
+
     def _migrate_old_settings(self):
-        """迁移旧版本的设置文件"""
-        old_config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
-        old_settings_file = os.path.join(old_config_dir, "settings.json")
-        
-        if os.path.exists(old_settings_file) and not os.path.exists(self.settings_file):
-            try:
-                # 读取旧设置
-                with open(old_settings_file, 'r', encoding='utf-8') as f:
-                    old_settings = json.load(f)
-                
-                # 保存到新位置
-                os.makedirs(os.path.dirname(self.settings_file), exist_ok=True)
-                with open(self.settings_file, 'w', encoding='utf-8') as f:
-                    json.dump(old_settings, f, indent=4)
-                    
-                print(f"Settings migrated from {old_settings_file} to {self.settings_file}")
-            except Exception as e:
-                print(f"Error migrating settings: {e}")
+        """Carry a pre-existing in-repo settings file over to the user dir."""
+        if os.path.exists(self.settings_file):
+            return
+        if not os.path.exists(self.defaults_file):
+            return
+        try:
+            with open(self.defaults_file, 'r', encoding='utf-8') as f:
+                previous = json.load(f)
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(previous, f, indent=4)
+            print(f"Settings migrated to {self.settings_file}")
+        except Exception as e:
+            print(f"Error migrating settings: {e}")
             
     def load_settings(self) -> Dict[str, Any]:
         """

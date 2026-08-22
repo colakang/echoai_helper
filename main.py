@@ -22,149 +22,11 @@ from src.SettingsManager import SettingsManager
 from src.TemplateManager import TemplateManager
 import src.TranscriberModels as TranscriberModels
 from src.config import EnvConfig, SystemConfig, AudioConfig
+from src import profiles
 from src.TranscriptUI import TranscriptUI
 #import torch
 
-def validate_phrase_timeout(value):
-    try:
-        if value == "": return True
-        val = float(value)
-        return 0.01 <= val <= 50
-    except ValueError:
-        return False
-
-def validate_buffer_chunks(value):
-    try:
-        if value == "": return True
-        val = int(value)
-        return 0 <= val <= 10
-    except ValueError:
-        return False
-
-def create_dropdown(root, options, row, column):
-    var = ctk.StringVar(value=options[0])
-    menu = ctk.CTkOptionMenu(root, variable=var, values=options)
-    menu.grid(row=row, column=column, padx=10, pady=3)
-    return menu, var
-
-def create_buffer_config(root, transcriber):
-    buffer_frame = ctk.CTkFrame(root)
-    buffer_frame.grid(row=2, column=1, padx=10, pady=3, sticky="ew")
-    
-    buffer_label = ctk.CTkLabel(
-        buffer_frame, 
-        text="Buffer Chunks (0-10):", 
-        font=("Arial", 12),
-        text_color="#FFFCF2"
-    )
-    buffer_label.pack(side="left", padx=5)
-    
-    def validate_chunks(value):
-        try:
-            if value == "": return True
-            val = int(value)
-            return 0 <= val <= 10
-        except ValueError:
-            return False
-    
-    validate_cmd = root.register(validate_chunks)
-    
-    buffer_entry = ctk.CTkEntry(
-        buffer_frame,
-        width=100,
-        validate="key",
-        validatecommand=(validate_cmd, '%P')
-    )
-    buffer_entry.pack(side="left", padx=5)
-    buffer_entry.insert(0, str(AudioConfig.get_buffer_chunks()))
-    
-    def update_chunks():
-        value = buffer_entry.get()
-        if AudioConfig.set_buffer_chunks(value):
-            buffer_label.configure(text_color="#FFFCF2")
-            # 不需要特别的重新计算，因为新的chunk数量会在下次update时自动应用
-        else:
-            buffer_label.configure(text_color="#FF6B6B")
-    
-    update_button = ctk.CTkButton(
-        buffer_frame,
-        text="Update Chunks",
-        width=100,
-        command=update_chunks
-    )
-    update_button.pack(side="left", padx=5)
-    
-    return buffer_frame
-
-def create_timeout_config(root):
-    # 创建配置框架
-    config_frame = ctk.CTkFrame(root)
-    config_frame.grid(row=2, column=0, padx=10, pady=3, sticky="ew")
-    
-    # 标签
-    timeout_label = ctk.CTkLabel(
-        config_frame, 
-        text="Phrase Timeout (0.01-50s):", 
-        font=("Arial", 12),
-        text_color="#FFFCF2"
-    )
-    timeout_label.pack(side="left", padx=5)
-    
-    # 验证函数
-    def validate_timeout(value):
-        try:
-            if value == "": return True
-            val = float(value)
-            return 0.01 <= val <= 50
-        except ValueError:
-            return False
-    
-    validate_cmd = root.register(validate_timeout)
-    
-    # 输入框
-    timeout_entry = ctk.CTkEntry(
-        config_frame,
-        width=100,
-        validate="key",
-        validatecommand=(validate_cmd, '%P')
-    )
-    timeout_entry.pack(side="left", padx=5)
-    timeout_entry.insert(0, str(AudioConfig.get_phrase_timeout()))
-    
-    # 更新按钮
-    def update_timeout():
-        value = timeout_entry.get()
-        if AudioConfig.set_phrase_timeout(value):
-            timeout_label.configure(text_color="#FFFCF2")  # 正常颜色
-        else:
-            timeout_label.configure(text_color="#FF6B6B")  # 错误颜色
-
-    update_button = ctk.CTkButton(
-        config_frame,
-        text="Update",
-        width=80,
-        command=update_timeout
-    )
-    update_button.pack(side="left", padx=5)
-    
-    # 实时更新
-    def on_timeout_change(*args):
-        value = timeout_entry.get()
-        if validate_timeout(value):
-            AudioConfig.set_phrase_timeout(value)
-            timeout_label.configure(text_color="#FFFCF2")
-        else:
-            timeout_label.configure(text_color="#FF6B6B")
-    
-    timeout_entry.bind('<KeyRelease>', on_timeout_change)
-    
-    return config_frame
-
-def write_in_textbox(textbox, text):
-    textbox.delete("0.0", "end")
-    textbox.insert("0.0", text)
-
-def update_response_UI(responder, textbox, update_interval_slider_label, update_interval_slider, freeze_state, transcript_ui):
+def update_response_UI(responder, textbox, freeze_state, transcript_ui):
     if not freeze_state[0] and not transcript_ui.is_response_frozen():
         new_response = responder.response
 
@@ -193,21 +55,11 @@ def update_response_UI(responder, textbox, update_interval_slider_label, update_
                 
             textbox.configure(state="normal")  # 保持可选择状态
 
-        # 更新响应间隔
-        update_interval = int(update_interval_slider.get())
-        responder.update_response_interval(update_interval)
-        update_interval_slider_label.configure(text=f"Update interval: {update_interval} seconds")
-
     # 定时调用以保持UI更新
-    textbox.after(300, update_response_UI, responder, textbox, update_interval_slider_label, 
-                 update_interval_slider, freeze_state, transcript_ui)
+    textbox.after(300, update_response_UI, responder, textbox, freeze_state,
+                  transcript_ui)
 
     
-def clear_context_(transcriber, audio_queue):
-    transcriber.clear_transcript_data()
-    with audio_queue.mutex:
-        audio_queue.queue.clear()
-
 def clear_context(transcriber, mic_queue, speaker_queue, transcript_ui):
     """
     Phase 2: 清除所有上下文（双队列版本）
@@ -427,91 +279,91 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     transcript_ui = TranscriptUI(transcript_textbox, response_manager)
     transcript_ui.add_click_handler(response_textbox)
 
-    # === Column 3: Configuration Controls ===
-    # Phrase Timeout
-    phrase_time_label = ctk.CTkLabel(
-        main_control_frame,
-        text="Phrase Timeout:",
-        font=("Arial", 12)
-    )
-    phrase_time_label.grid(row=0, column=2, padx=5, pady=2, sticky="w")
-    
-    validate_cmd = root.register(validate_phrase_timeout)
-    phrase_time_entry = ctk.CTkEntry(
-        main_control_frame,
-        width=70,
-        placeholder_text="0.01-50s",
-        validate="key",
-        validatecommand=(validate_cmd, '%P')
-    )
-    phrase_time_entry.grid(row=0, column=2, padx=(100, 5), pady=2, sticky="w")
-    phrase_time_entry.insert(0, str(settings_manager.get_setting("phrase_timeout")))
-    
-    def update_settings():
-        phrase_timeout = phrase_time_entry.get()
-        if AudioConfig.set_phrase_timeout(phrase_timeout):
-            settings_manager.update_setting("phrase_timeout", float(phrase_timeout))
-            phrase_time_label.configure(text_color="#FFFCF2")
-        else:
-            phrase_time_label.configure(text_color="#FF6B6B")
-            
-    update_button = ctk.CTkButton(
-        main_control_frame,
-        text="Update",
-        width=60,
-        command=update_settings
-    )
-    update_button.grid(row=0, column=2, padx=(180, 5), pady=2, sticky="w")
+    # === Column 3: Transcription Controls ===
+    #
+    # These three used to be "Phrase Timeout", "Buffer Chunks" and "Update
+    # Interval". All three had stopped doing anything: segmentation moved to
+    # the VAD, chunks_buffer was deleted, and the responder stored the
+    # interval without ever reading it. A control that silently does nothing
+    # is worse than no control.
 
-    # Buffer Chunks
-    buffer_label = ctk.CTkLabel(
-        main_control_frame, 
-        text="Buffer Chunks:",
+    profile_label = ctk.CTkLabel(
+        main_control_frame,
+        text="Mode:",
         font=("Arial", 12)
     )
-    buffer_label.grid(row=1, column=2, padx=5, pady=2, sticky="w")
-    
-    buffer_options = [str(i) for i in range(11)]
-    saved_buffer = str(settings_manager.get_setting("buffer_chunks"))
-    buffer_var = ctk.StringVar(value=saved_buffer)
-    
-    def on_buffer_change(value):
-        settings_manager.update_setting("buffer_chunks", int(value))
-        AudioConfig.set_buffer_chunks(value)
-        buffer_label.configure(text_color="#639cdc")
-        root.after(500, lambda: buffer_label.configure(text_color="#FFFCF2"))
-    
-    buffer_dropdown = ctk.CTkOptionMenu(
-        main_control_frame,
-        variable=buffer_var,
-        values=buffer_options,
-        width=70,
-        command=on_buffer_change
-    )
-    buffer_dropdown.grid(row=1, column=2, padx=(100, 5), pady=2, sticky="w")
+    profile_label.grid(row=0, column=2, padx=5, pady=2, sticky="w")
 
-    # Update Interval
-    interval_label = ctk.CTkLabel(
-        main_control_frame, 
-        text="Update Interval:",
+    saved_profile = profiles.by_key(settings_manager.get_setting("profile"))
+    profile_var = ctk.StringVar(value=saved_profile.label)
+
+    profile_hint = ctk.CTkLabel(
+        main_control_frame,
+        text=saved_profile.description,
+        font=("Arial", 10),
+        text_color="#8a8a8a",
+        wraplength=260,
+        justify="left",
+    )
+    profile_hint.grid(row=1, column=2, columnspan=1, padx=5, pady=(0, 2), sticky="w")
+
+    def on_profile_change(label):
+        profile = profiles.by_label(label)
+        profiles.apply(profile, transcriber)
+        settings_manager.update_setting("profile", profile.key)
+        settings_manager.update_setting("min_silence_ms", profile.min_silence_ms)
+        profile_hint.configure(text=profile.description)
+        pause_var.set(str(profile.min_silence_ms))
+        profile_label.configure(text_color="#639cdc")
+        root.after(500, lambda: profile_label.configure(text_color="#FFFCF2"))
+
+    profile_dropdown = ctk.CTkOptionMenu(
+        main_control_frame,
+        variable=profile_var,
+        values=profiles.labels(),
+        width=150,
+        height=dropdown_height,
+        command=on_profile_change,
+    )
+    profile_dropdown.grid(row=0, column=2, padx=(60, 5), pady=2, sticky="w")
+
+    # Pause length -- the one segmentation knob worth exposing. Shorter reacts
+    # sooner but splits sentences; longer merges separate turns.
+    pause_label = ctk.CTkLabel(
+        main_control_frame,
+        text="Pause:",
         font=("Arial", 12)
     )
-    interval_label.grid(row=2, column=2, padx=5, pady=2, sticky="w")
-    
-    saved_interval = str(int(settings_manager.get_setting("update_interval")))
-    interval_values = [str(i) for i in range(1, 11)]
-    
-    def on_interval_change(value):
-        settings_manager.update_setting("update_interval", float(value))
-    
-    interval_dropdown = ctk.CTkOptionMenu(
+    pause_label.grid(row=2, column=2, padx=5, pady=2, sticky="w")
+
+    pause_values = ["300", "450", "600", "700", "900", "1200", "1500"]
+    pause_var = ctk.StringVar(value=str(settings_manager.get_setting("min_silence_ms")))
+
+    def on_pause_change(value):
+        settings_manager.update_setting("min_silence_ms", int(value))
+        current = profiles.by_label(profile_var.get())
+        config = current.segmenter_config()
+        config.min_silence_ms = int(value)
+        transcriber.apply_segmenter_config(config)
+        pause_label.configure(text_color="#639cdc")
+        root.after(500, lambda: pause_label.configure(text_color="#FFFCF2"))
+
+    pause_dropdown = ctk.CTkOptionMenu(
         main_control_frame,
-        values=interval_values,
+        variable=pause_var,
+        values=pause_values,
         width=70,
-        command=on_interval_change
+        command=on_pause_change,
     )
-    interval_dropdown.grid(row=2, column=2, padx=(100, 5), pady=2, sticky="w")
-    interval_dropdown.set(saved_interval)
+    pause_dropdown.grid(row=2, column=2, padx=(60, 5), pady=2, sticky="w")
+
+    pause_unit = ctk.CTkLabel(
+        main_control_frame,
+        text="ms silence ends a sentence",
+        font=("Arial", 10),
+        text_color="#8a8a8a",
+    )
+    pause_unit.grid(row=2, column=2, padx=(135, 5), pady=2, sticky="w")
 
     # === Column 4: Window Controls ===
     # Create a frame for the first row controls
@@ -610,19 +462,18 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     for child in root.winfo_children():
         child.grid_configure(pady=0)
 
-    # 在这里加入return语句
-    return (
-        transcript_ui,
-        response_textbox,
-        interval_dropdown,
-        interval_label,
-        freeze_button,
-        clear_transcript_button,
-        phrase_time_entry,
-        buffer_dropdown,
-        update_button,
-        export_button  # 添加这个
-    )
+    # A dict rather than a positional tuple: the tuple had grown to ten
+    # entries and still carried three widgets whose controls no longer did
+    # anything, which is exactly how that happens.
+    return {
+        "transcript_ui": transcript_ui,
+        "response_textbox": response_textbox,
+        "freeze_button": freeze_button,
+        "clear_transcript_button": clear_transcript_button,
+        "export_button": export_button,
+        "profile_dropdown": profile_dropdown,
+        "pause_dropdown": pause_dropdown,
+    }
 
 def main():
     try:
@@ -698,18 +549,12 @@ def main():
     #monitor.start()
 
     root = ctk.CTk()
-    (
-        transcript_ui,
-        response_textbox,
-        update_interval_slider,
-        update_interval_slider_label,
-        freeze_button,
-        clear_transcript_button,
-        phrase_time_entry,
-        buffer_dropdown,
-        update_button,
-        export_button
-    ) = create_ui_components(root, response_manager, transcriber, mic_queue, speaker_queue)
+    widgets = create_ui_components(root, response_manager, transcriber,
+                                   mic_queue, speaker_queue)
+    transcript_ui = widgets["transcript_ui"]
+    response_textbox = widgets["response_textbox"]
+    freeze_button = widgets["freeze_button"]
+    clear_transcript_button = widgets["clear_transcript_button"]
 
 
     # 创建设置管理器实例
@@ -723,6 +568,16 @@ def main():
     root.attributes('-topmost', saved_topmost)  # 设置置顶状态   
     
     SystemConfig.set_record_only_mode(settings_manager.get_setting("record_only_mode"))
+
+    # Apply the saved transcription profile before the first chunk arrives.
+    saved_profile = profiles.by_key(settings_manager.get_setting("profile"))
+    config = saved_profile.segmenter_config()
+    config.min_silence_ms = int(settings_manager.get_setting("min_silence_ms"))
+    profiles.apply(saved_profile, transcriber)
+    transcriber.apply_segmenter_config(config)
+    print(f"[INFO] Profile: {saved_profile.label} "
+          f"(live partials {'on' if saved_profile.live_partials else 'off'}, "
+          f"pause {config.min_silence_ms}ms)")
  
 
     # 允许窗口在任务栏显示 (Windows-only Tk attribute; macOS raises TclError)
@@ -762,12 +617,9 @@ def main():
 
     freeze_button.configure(command=show_popup)
 
-    update_interval_slider_label.configure(text=f"Update interval: {update_interval_slider.get()} seconds")
-
     # 更新transcript UI调用
     transcript_ui.update_transcript(transcriber)
-    update_response_UI(responder, response_textbox, update_interval_slider_label, 
-                      update_interval_slider, freeze_state,transcript_ui)
+    update_response_UI(responder, response_textbox, freeze_state, transcript_ui)
 
     TemplateManager.initialize_default_role()
 
