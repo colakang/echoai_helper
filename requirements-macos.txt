@@ -1,0 +1,40 @@
+# EchoAI Helper — macOS (Apple Silicon) dependencies
+#
+# Differs from requirements.txt (Windows) in three ways:
+#   1. No PyAudioWPatch — it is a Windows-only fork of PyAudio (WASAPI loopback)
+#      and has no macOS distribution at all. macOS captures system output via
+#      sounddevice + a virtual audio device (BlackHole).
+#   2. No CUDA extra-index-url — Apple Silicon uses MPS/CPU wheels from PyPI.
+#   3. Drops dead deps carried by requirements.txt: `Wave` (stdlib `wave` is
+#      built in) and `openai-whisper` (every whisper import is commented out).
+
+# --- audio capture ---
+sounddevice
+
+# --- numeric / DSP ---
+numpy<2            # funasr/torch still assume the numpy 1.x ABI
+scipy              # resampling (48kHz speaker -> 16kHz ASR)
+
+# --- ASR ---
+torch
+torchaudio
+funasr
+modelscope
+huggingface_hub
+loguru             # imported by src/asr/asr_with_vad.py
+onnxruntime        # silero VAD (src/asr/models/silero_vad.onnx)
+soundfile          # wav I/O for scripts/check_audio.py
+
+# --- LLM ---
+openai
+litellm            # optional: 100+ providers via conf.yaml LLM.provider
+
+# --- UI ---
+# customtkinter needs Tk. Homebrew python has no _tkinter by default:
+#     brew install python-tk@3.12
+customtkinter==5.1.3
+
+# --- misc ---
+python-dotenv
+pyyaml
+pytz

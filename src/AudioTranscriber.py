@@ -1,22 +1,15 @@
 #src/AudioTranscriber.py
 
 #import whisper
-import uuid
-import wave
+import math
 import os
 import threading
-import tempfile
-import src.custom_speech_recognition as sr
-import io
-from datetime import timedelta
-import pyaudiowpatch as pyaudio
-from heapq import merge
-from datetime import datetime
-import time
-from .config import AudioConfig, SystemConfig
-import torch
+from datetime import datetime, timedelta
+
 import numpy as np
 from scipy import signal
+
+from .config import AudioConfig, SystemConfig
 
 
 
@@ -41,41 +34,39 @@ class AudioTranscriber:
         # Phase 2: Thread safety for shared model
         self.model_lock = threading.Lock()  # Ensure serial model inference
 
-        # Phase 2: Per-source data locks for thread-safe buffer operations
-        self.source_locks = {
-            "You": threading.Lock(),
-            "Speaker": threading.Lock()
-        }
-
         # Future: Streaming mode support (reserved interface)
         self.streaming_mode = streaming_mode
 
-        self.audio_sources = {
-            "You": {
-                "sample_rate": mic_source.SAMPLE_RATE,
-                "sample_width": mic_source.SAMPLE_WIDTH,
-                "channels": mic_source.channels,
+        # Either source may be absent: a Mac mini has no built-in microphone,
+        # and macOS without a virtual audio device has no loopback. Build only
+        # the tracks that actually exist so one missing device degrades the app
+        # instead of crashing it.
+        self.audio_sources = {}
+        for name, source in (("You", mic_source), ("Speaker", speaker_source)):
+            if source is None:
+                print(f"[WARN] No audio source for '{name}' — that track is disabled.")
+                continue
+            self.audio_sources[name] = {
+                "sample_rate": source.SAMPLE_RATE,
+                "sample_width": source.SAMPLE_WIDTH,
+                "channels": source.channels,
                 "last_sample": bytes(),
                 "saved_sample": bytes(),
                 "chunks_buffer": [],  # 使用列表存储chunks
                 "last_spoken": None,
                 "first_spoken": None,
-                "new_phrase": True,
-                "process_data_func": self.process_mic_data
-            },
-            "Speaker": {
-                "sample_rate": speaker_source.SAMPLE_RATE,
-                "sample_width": speaker_source.SAMPLE_WIDTH,
-                "channels": speaker_source.channels,
-                "last_sample": bytes(),
-                "saved_sample": bytes(),
-                "chunks_buffer": [],  # 使用列表存储chunks
-                "last_spoken": None,
-                "first_spoken": None,
-                "new_phrase": True,
-                "process_data_func": self.process_speaker_data
+                "new_phrase": True
             }
-        }
+
+        if not self.audio_sources:
+            raise RuntimeError(
+                "No audio sources available — neither a microphone nor a "
+                "loopback device could be opened. See docs/macos-audio-setup.md."
+            )
+
+        # Phase 2: per-source data locks for thread-safe buffer operations.
+        # Keyed off the tracks that exist, so a disabled track has no lock.
+        self.source_locks = {name: threading.Lock() for name in self.audio_sources}
 
     def transcribe_audio_queue(self, audio_queue):
         """
@@ -148,61 +139,49 @@ class AudioTranscriber:
         source_info["last_spoken"] = time_spoken
         source_info["saved_sample"] = source_info["last_sample"] 
 
-    def process_mic_data(self, data, temp_file_name):
-        audio_data = sr.AudioData(data, self.audio_sources["You"]["sample_rate"], self.audio_sources["You"]["sample_width"])
-        wav_data = io.BytesIO(audio_data.get_wav_data())
-        with open(temp_file_name, 'w+b') as f:
-            f.write(wav_data.read())
-
-    def process_speaker_data(self, data, temp_file_name):
-        with wave.open(temp_file_name, 'wb') as wf:
-            wf.setnchannels(self.audio_sources["Speaker"]["channels"])
-            p = pyaudio.PyAudio()
-            wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
-            wf.setframerate(self.audio_sources["Speaker"]["sample_rate"])
-            wf.writeframes(data)
-
     def convert_bytes_to_numpy(self, audio_bytes, who_spoke):
-        """Convert raw audio bytes to numpy array for direct ASR processing"""
+        """
+        Convert raw int16 PCM bytes to the mono float32 @16kHz array FunASR wants.
+
+        Driven entirely by the source's declared format rather than by which
+        track it is: both backends hand us interleaved int16 PCM, and a mic at
+        48kHz stereo needs exactly the same treatment as a loopback at 48kHz
+        stereo.
+        """
         source_info = self.audio_sources[who_spoke]
         target_sample_rate = 16000  # FunASR expects 16kHz
 
-        if who_spoke == "You":
-            # For microphone data, use sr.AudioData conversion
-            audio_data = sr.AudioData(
-                audio_bytes,
-                source_info["sample_rate"],
-                source_info["sample_width"]
-            )
-            wav_bytes = audio_data.get_wav_data()
-            # Convert WAV bytes to numpy array
-            wav_io = io.BytesIO(wav_bytes)
-            with wave.open(wav_io, 'rb') as wf:
-                frames = wf.readframes(wf.getnframes())
-                audio_np = np.frombuffer(frames, dtype=np.int16)
+        audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+        if audio_np.size == 0:
+            return np.zeros(0, dtype=np.float32)
+
+        # --- down-mix to mono ---
+        channels = int(source_info["channels"])
+        if channels > 1:
+            usable = (audio_np.size // channels) * channels
+            if usable == 0:
+                return np.zeros(0, dtype=np.float32)
+            # Average in float to avoid int16 overflow on summation.
+            audio_np = audio_np[:usable].reshape(-1, channels).mean(axis=1)
         else:
-            # For speaker data, direct PCM conversion
-            # Raw PCM bytes -> int16 array
-            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+            audio_np = audio_np.astype(np.float64)
 
-            # Convert stereo to mono if needed
-            if source_info["channels"] == 2:
-                # Reshape to (samples, 2) and average channels
-                try:
-                    audio_np = audio_np.reshape(-1, 2)
-                    audio_np = audio_np.mean(axis=1).astype(np.int16)
-                except Exception as e:
-                    print(f"[ERROR] Failed to convert stereo to mono: {e}")
-                    # Fallback: just take one channel
-                    audio_np = audio_np[::2]
+        # --- normalise to [-1, 1] before resampling ---
+        # Resampling in float avoids the double int16 round-trip the previous
+        # version did, which quantised twice for no reason.
+        audio_np = (audio_np / 32768.0).astype(np.float32)
 
-            # Resample if needed (Speaker is usually 48kHz, needs to be 16kHz for FunASR)
-            if source_info["sample_rate"] != target_sample_rate:
-                num_samples = int(len(audio_np) * target_sample_rate / source_info["sample_rate"])
-                audio_np = signal.resample(audio_np, num_samples).astype(np.int16)
-
-        # Convert to float32 and normalize to [-1, 1] range (required by FunASR)
-        audio_np = audio_np.astype(np.float32) / 32768.0
+        # --- resample to 16kHz ---
+        source_rate = int(source_info["sample_rate"])
+        if source_rate != target_sample_rate:
+            # resample_poly (polyphase FIR) instead of signal.resample (FFT):
+            # 48k -> 16k is an exact 1/3 decimation, so this is both far
+            # cheaper and free of the circular-convolution edge artifacts the
+            # FFT method introduces at chunk boundaries.
+            gcd = math.gcd(source_rate, target_sample_rate)
+            up = target_sample_rate // gcd
+            down = source_rate // gcd
+            audio_np = signal.resample_poly(audio_np, up, down).astype(np.float32)
 
         return audio_np
 

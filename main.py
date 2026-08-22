@@ -14,7 +14,7 @@ import glob
 import json
 import tkinter as tk  # 添加这一行
 
-import src.AudioRecorder as AudioRecorder
+from src.audio import get_audio_backend
 from src.AudioTranscriber import AudioTranscriber
 from src.GPTResponder import GPTResponder
 from src.ResponseManager import ResponseManager
@@ -325,7 +325,10 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
             print(f"Error updating system role: {e}")
 
     for var in template_vars.values():
-        var.trace('w', on_selection_change)
+        # trace_add('write'), not the legacy trace('w'): Tk 9.0 — which
+        # Homebrew's python-tk@3.12 ships — removed the old form, and it
+        # raises TclError('bad option "variable"') at startup.
+        var.trace_add('write', on_selection_change)
 
     # === Column 2: Action Buttons ===
     def export_responses():
@@ -642,29 +645,48 @@ def main():
     mic_queue = queue.Queue()
     speaker_queue = queue.Queue()
 
-    user_audio_recorder = AudioRecorder.DefaultMicRecorder()
-    user_audio_recorder.record_into_queue(mic_queue)
+    # Platform-neutral capture: WASAPI loopback on Windows, sounddevice +
+    # virtual audio device on macOS. Either recorder may be None (no mic, or
+    # no loopback route), so start only the tracks that actually exist.
+    backend = get_audio_backend()
+    print(f"[INFO] Audio backend: {backend.name}")
 
-    time.sleep(2)
+    user_audio_recorder = backend.create_mic_recorder()
+    if user_audio_recorder is not None:
+        user_audio_recorder.record_into_queue(mic_queue)
+        time.sleep(2)
 
-    speaker_audio_recorder = AudioRecorder.DefaultSpeakerRecorder()
-    speaker_audio_recorder.record_into_queue(speaker_queue)
+    speaker_audio_recorder = backend.create_speaker_recorder()
+    if speaker_audio_recorder is not None:
+        speaker_audio_recorder.record_into_queue(speaker_queue)
+
+    if user_audio_recorder is None and speaker_audio_recorder is None:
+        print("ERROR: No audio input available. Run "
+              "`python scripts/check_audio.py` to diagnose.")
+        return
 
     model = TranscriberModels.get_model('--api' in sys.argv)
 
     # 创建ResponseManager实例
     response_manager = ResponseManager()
 
-    transcriber = AudioTranscriber(user_audio_recorder.source, speaker_audio_recorder.source, model, response_manager)
+    transcriber = AudioTranscriber(
+        user_audio_recorder.source if user_audio_recorder else None,
+        speaker_audio_recorder.source if speaker_audio_recorder else None,
+        model,
+        response_manager,
+    )
 
     # Phase 2: Dual-thread transcription (shared model, independent queues)
-    mic_transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(mic_queue,), name="MicTranscriber")
-    mic_transcribe.daemon = True
-    mic_transcribe.start()
+    if user_audio_recorder is not None:
+        mic_transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(mic_queue,), name="MicTranscriber")
+        mic_transcribe.daemon = True
+        mic_transcribe.start()
 
-    speaker_transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(speaker_queue,), name="SpeakerTranscriber")
-    speaker_transcribe.daemon = True
-    speaker_transcribe.start()
+    if speaker_audio_recorder is not None:
+        speaker_transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(speaker_queue,), name="SpeakerTranscriber")
+        speaker_transcribe.daemon = True
+        speaker_transcribe.start()
 
     responder = GPTResponder(response_manager)
     respond = threading.Thread(target=responder.respond_to_transcriber, args=(transcriber,))
@@ -703,8 +725,9 @@ def main():
     SystemConfig.set_record_only_mode(settings_manager.get_setting("record_only_mode"))
  
 
-    # 允许窗口在任务栏显示
-    root.wm_attributes('-toolwindow', False)
+    # 允许窗口在任务栏显示 (Windows-only Tk attribute; macOS raises TclError)
+    if sys.platform == "win32":
+        root.wm_attributes('-toolwindow', False)
 
     print("READY")
     root.grid_rowconfigure(0, weight=85)  # 主内容区域占70%
