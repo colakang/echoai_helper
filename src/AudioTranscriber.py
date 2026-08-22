@@ -10,9 +10,19 @@ import numpy as np
 from scipy import signal
 
 from .config import AudioConfig, SystemConfig
+from .asr.hypothesis import HypothesisTracker
+from .asr.segmenter import Event, SegmenterConfig, SpeechSegmenter
+from .asr.vad import VAD
+
+
+def _vad_model_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "asr", "models", "silero_vad.onnx")
 
 
 
+# Segmentation is now driven by SegmenterConfig; these survive only because
+# main.py's UI still exposes a "Phrase Timeout" control.
 PHRASE_TIMEOUT = 5.2
 MAX_PHRASE_TIMEOUT = 30.2
 MAX_PHRASES = 9999
@@ -50,9 +60,6 @@ class AudioTranscriber:
                 "sample_rate": source.SAMPLE_RATE,
                 "sample_width": source.SAMPLE_WIDTH,
                 "channels": source.channels,
-                "last_sample": bytes(),
-                "saved_sample": bytes(),
-                "chunks_buffer": [],  # 使用列表存储chunks
                 "last_spoken": None,
                 "first_spoken": None,
                 "new_phrase": True
@@ -68,79 +75,116 @@ class AudioTranscriber:
         # Keyed off the tracks that exist, so a disabled track has no lock.
         self.source_locks = {name: threading.Lock() for name in self.audio_sources}
 
+        # Two-pass transcription, one segmenter and one tracker per track.
+        #
+        #   fast lane  - re-transcribe the utterance so far on every chunk,
+        #                stabilised by LocalAgreement, for live display;
+        #   slow lane  - at the pause, transcribe the whole utterance once.
+        #                Its result is authoritative and replaces the live text.
+        #
+        # The slow lane is not merely a bigger batch: cutting at a pause
+        # rather than at a fixed timeout is most of why it is better. On a
+        # fixed cut lands mid-sentence and hands the model half a clause;
+        # a pause-aligned one gives it the whole utterance.
+        self.segmenters = {
+            name: SpeechSegmenter(VAD(_vad_model_path()), SegmenterConfig())
+            for name in self.audio_sources
+        }
+        self.trackers = {name: HypothesisTracker() for name in self.audio_sources}
+
     def transcribe_audio_queue(self, audio_queue):
         """
-        Phase 2: Dual-queue support with thread-safe model access.
-        This method can be called by multiple threads, each processing its own queue.
+        One thread per track. Audio is segmented on speech pauses rather than
+        on a fixed timeout, and each utterance is transcribed twice: once
+        incrementally while it is being spoken, and once in full when it ends.
         """
         while True:
             who_spoke, data, time_spoken = audio_queue.get()
-
-            # Phase 2: Thread-safe buffer update
-            with self.source_locks[who_spoke]:
-                self.update_last_sample_and_phrase_status(who_spoke, data, time_spoken)
-                source_info = self.audio_sources[who_spoke]
-                # Copy saved_sample for processing (avoid holding lock during inference)
-                audio_data = source_info["saved_sample"]
-
-            text = ''
             try:
-                # Phase 1: Convert audio bytes to numpy (preprocessing, no lock needed)
-                audio_np = self.convert_bytes_to_numpy(audio_data, who_spoke)
-
-                # Phase 2: Thread-safe model inference (shared model, serial execution)
-                with self.model_lock:
-                    text = self._transcribe_audio(audio_np)
-
+                self._process_chunk(who_spoke, data, time_spoken)
             except Exception as e:
                 print(f"Error in transcription: {e}")
                 import traceback
                 traceback.print_exc()
 
-            # Phase 2: Thread-safe result processing
-            with self.source_locks[who_spoke]:
-                source_info = self.audio_sources[who_spoke]
-                if text != '' and text.lower() != 'you':
-                    print("Catching: "+ text+"\n")
-                    ## if text is end of 指定符号，则设定为new phrase
-                    if (source_info["first_spoken"] and time_spoken - source_info["first_spoken"] > timedelta(seconds=AudioConfig.get_phrase_timeout())) :
-                        print ("new phrase......\n")
-                        source_info["new_phrase"] = True
-                    self.update_transcript(who_spoke, text, time_spoken)
-                else:
-                    print("\r "+who_spoke+" text: Null, New_Phrase:"+str(source_info["new_phrase"])+"\r\n")
-
-                self._enforce_buffer_cap(who_spoke, source_info, time_spoken)
-
-    def _sample_seconds(self, who_spoke, sample: bytes) -> float:
-        """How many seconds of audio a raw PCM buffer holds."""
-        info = self.audio_sources[who_spoke]
-        bytes_per_second = info["sample_rate"] * info["channels"] * info["sample_width"]
-        return len(sample) / bytes_per_second if bytes_per_second else 0.0
-
-    def _enforce_buffer_cap(self, who_spoke, source_info, time_spoken) -> None:
-        """
-        Hard ceiling on how much audio one phrase may accumulate.
-
-        last_sample only ever shrinks in _reset_source_info, which runs from
-        update_transcript -- and update_transcript is only reached when the
-        model returns usable text. Audio that clears the capture energy gate
-        but yields no transcript (music, keyboard noise, a fan, non-speech
-        chatter) therefore accumulates forever: the buffer grows without
-        bound, and every subsequent chunk re-transcribes all of it.
-
-        Unnoticeable in a five-minute demo, fatal in the 1-2 hour meetings
-        this is now aimed at. MAX_PHRASE_TIMEOUT has been declared since the
-        first commit but never enforced; enforce it.
-        """
-        held = self._sample_seconds(who_spoke, source_info["last_sample"])
-        if held <= MAX_PHRASE_TIMEOUT:
+    def _process_chunk(self, who_spoke, data, time_spoken):
+        audio_np = self.convert_bytes_to_numpy(data, who_spoke)
+        if audio_np.size == 0:
             return
 
-        print(f"[WARN] {who_spoke}: buffer hit the {MAX_PHRASE_TIMEOUT}s cap "
-              f"({held:.1f}s held) without a phrase break — forcing one.")
-        source_info["new_phrase"] = True
-        self._reset_source_info(source_info, time_spoken)
+        with self.source_locks[who_spoke]:
+            events = self.segmenters[who_spoke].process(audio_np)
+
+        # Finalise any utterance that ended in this chunk before emitting a
+        # partial, or the partial would describe the segment that just closed.
+        for event, segment in events:
+            if event is Event.SPEECH_END and segment is not None:
+                self._finalize_segment(who_spoke, segment, time_spoken)
+
+        if AudioConfig.get_live_partials():
+            self._emit_partial(who_spoke, time_spoken)
+
+    def _emit_partial(self, who_spoke, time_spoken):
+        """
+        Fast lane: re-transcribe the utterance so far.
+
+        The result churns -- the same audio yields "good morning, everyone."
+        then "good morning. Everyone." -- so it goes through LocalAgreement,
+        which settles the agreeing prefix and leaves the rest provisional.
+        """
+        with self.source_locks[who_spoke]:
+            segmenter = self.segmenters[who_spoke]
+            if not segmenter.in_speech:
+                return
+            audio = segmenter.active_audio
+
+        if audio.size == 0:
+            return
+
+        with self.model_lock:
+            text = self._transcribe_audio(audio)
+        if not self._is_usable(text):
+            return
+
+        with self.source_locks[who_spoke]:
+            tracker = self.trackers[who_spoke]
+            tracker.update(text)
+            live = (tracker.committed + " " + tracker.pending).strip()
+            if live:
+                self.update_transcript(who_spoke, live, time_spoken)
+
+    def _finalize_segment(self, who_spoke, segment, time_spoken):
+        """
+        Slow lane: transcribe the finished utterance in one pass.
+
+        This is the authoritative text. It supersedes whatever the fast lane
+        displayed, and it is the point at which the sentence is known to be
+        complete -- which is what the responder waits for.
+        """
+        with self.model_lock:
+            text = self._transcribe_audio(segment.audio)
+
+        with self.source_locks[who_spoke]:
+            self.trackers[who_spoke].reset()
+            if not self._is_usable(text):
+                # Nothing intelligible; leave the phrase open so the next
+                # utterance does not inherit a blank record.
+                return
+
+            print(f"Segment [{who_spoke} {segment.duration_s:.1f}s] {text}")
+            self.update_transcript(who_spoke, text, time_spoken)
+            self.audio_sources[who_spoke]["new_phrase"] = True
+
+            # Trigger the responder here, not when the phrase started. The
+            # old code called create_response() with the first fragment of an
+            # utterance, so the LLM was answering a truncated question.
+            if (who_spoke.lower() == "speaker"
+                    and not SystemConfig.get_record_only_mode()):
+                self.transcript_changed_event.set()
+
+    @staticmethod
+    def _is_usable(text) -> bool:
+        return bool(text) and text.strip() != ""
 
     def _transcribe_audio(self, audio_np):
         """
@@ -154,22 +198,6 @@ class AudioTranscriber:
         else:
             # Current: Accumulate mode
             return self.audio_model.get_transcription_np(audio_np)
-
-    def update_last_sample_and_phrase_status(self, who_spoke, data, time_spoken):
-        source_info = self.audio_sources[who_spoke]
-        #print("#1 "+who_spoke+" Now:"+str(time_spoken)+" First:"+str(source_info["first_spoken"])+" Last:"+str(source_info["last_spoken"])+"\r\n")
-        # 更新chunks buffer
-        max_chunks = AudioConfig.get_buffer_chunks()
-        if max_chunks > 0:  # 只在需要buffer时处理
-            source_info["chunks_buffer"].append(data)
-            # 保持buffer大小不超过限制
-            if len(source_info["chunks_buffer"]) > max_chunks:
-                source_info["chunks_buffer"].pop(0)  # 移除最老的chunk
-        if source_info["first_spoken"] == None:
-                source_info["first_spoken"] = time_spoken
-        source_info["last_sample"] += data
-        source_info["last_spoken"] = time_spoken
-        source_info["saved_sample"] = source_info["last_sample"] 
 
     def convert_bytes_to_numpy(self, audio_bytes, who_spoke):
         """
@@ -246,28 +274,15 @@ class AudioTranscriber:
         # 更新数据结构
         update_method = 'insert' if source_info["new_phrase"] or not self.transcript_data[who_spoke] else 'update'
         self._update_all_transcripts(speaker_type, record, update_method)
-        
-        # 处理新短语的状态更新
-        if source_info["new_phrase"]:
-            # 如果是用户输入且创建了新的response_id，在所有数据更新完成后触发事件
-            #if speaker_type == 'speaker' and response_id:
-            if speaker_type == 'speaker' and response_id and not SystemConfig.get_record_only_mode():
-    
-                print("Setting transcript_changed_event after data update")
-                self.transcript_changed_event.set()
-                
-            self._reset_source_info(source_info, time_spoken)
 
-    def _reset_source_info(self, source_info, time_spoken):
-        """重置source_info的状态"""
-        buffered_data = b''.join(source_info["chunks_buffer"]) if source_info["chunks_buffer"] else bytes()
-        source_info.update({
-            'first_spoken': time_spoken,
-            'last_sample': buffered_data,  # 使用合并后的buffer数据
-            'new_phrase': False,
-            'chunks_buffer': []  # 重置chunks buffer
-        })
-        print('Reset data with buffer.....\n')
+        # The responder is no longer woken here. This ran when a phrase
+        # *started*, so create_response() above was handed the first fragment
+        # of an utterance and the LLM answered a truncated question.
+        # _finalize_segment triggers it instead, once the sentence is complete.
+        if source_info["new_phrase"]:
+            source_info["new_phrase"] = False
+            source_info["first_spoken"] = time_spoken
+        source_info["last_spoken"] = time_spoken
 
     def _update_all_transcripts(self, speaker_type, record, method='insert'):
         """更新所有转录数据结构"""
@@ -357,9 +372,8 @@ class AudioTranscriber:
         self.structured_transcript["combined"].clear()
 
         for source_name, source_info in self.audio_sources.items():
-            source_info["last_sample"] = bytes()
-            source_info["saved_sample"] = bytes()
-            source_info["chunks_buffer"].clear()  # 清除chunks buffer
             source_info["new_phrase"] = True
             source_info["last_spoken"] = None
             source_info["first_spoken"] = None
+            self.segmenters[source_name].reset()
+            self.trackers[source_name].reset()

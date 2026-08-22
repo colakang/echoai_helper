@@ -178,6 +178,25 @@ class AudioConfig:
     _phrase_timeout = 5.2  # 默认值
     _buffer_chunks = 1     # 默认值
 
+    # Whether to run the fast lane: re-transcribe the utterance in progress on
+    # every chunk so text appears while someone is still speaking.
+    #
+    # Off by default, which suits meeting notes -- the primary use case. There
+    # the only thing that matters is the accurate pass at each pause, and
+    # skipping partials removes roughly two thirds of all model calls.
+    #
+    # On for live interview, where seeing words ~0.6s after they are spoken is
+    # the entire point and paying for it is the trade.
+    _live_partials = False
+
+    @classmethod
+    def get_live_partials(cls):
+        return cls._live_partials
+
+    @classmethod
+    def set_live_partials(cls, value: bool):
+        cls._live_partials = bool(value)
+
     @classmethod
     def get_buffer_chunks(cls):
         return cls._buffer_chunks

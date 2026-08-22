@@ -93,40 +93,40 @@ def test_empty_and_ragged_buffers_do_not_raise():
 
 
 # --------------------------------------------------------------------------
-# Buffer cap  (regression: unbounded growth)
+# Buffer bounds
 # --------------------------------------------------------------------------
+#
+# The transcriber used to accumulate raw audio in last_sample, which only
+# shrank on a successful transcription -- audio that yielded no text grew the
+# buffer without limit. That machinery is gone: the segmenter owns the buffer
+# now and its max_segment_s caps it regardless of what the model returns.
 
-def test_buffer_is_capped_when_asr_returns_nothing():
-    """
-    Audio that clears the capture energy gate but yields no transcript used to
-    accumulate forever, because last_sample only shrank on a successful
-    transcription. Over a 1-2 hour meeting that is unbounded memory plus an
-    ever-growing re-transcription cost.
-    """
+def test_buffer_stays_bounded_when_asr_returns_nothing(monkeypatch):
+    """Feed far more audio than the cap, with the model returning nothing at
+    all, and the buffer must still not grow without limit."""
     t = make_transcriber(speaker=FakeSource())
-    info = t.audio_sources["Speaker"]
+    cap = t.segmenters["Speaker"].config.max_segment_s
+
+    t.audio_model = type("Silent", (), {"get_transcription_np": lambda self, a: ""})()
+    monkeypatch.setattr(t.segmenters["Speaker"].vad, "process_chunk", lambda chunk: 0.9)
+
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for i in range(int(cap * 3)):
+        t._process_chunk("Speaker", pcm(1.0), now + timedelta(seconds=i))
 
-    # Simulate ~2x the cap arriving with the model never returning text.
-    for i in range(int(MAX_PHRASE_TIMEOUT * 2)):
-        stamp = now + timedelta(seconds=i)
-        t.update_last_sample_and_phrase_status("Speaker", pcm(1.0), stamp)
-        t._enforce_buffer_cap("Speaker", info, stamp)
-
-    held = t._sample_seconds("Speaker", info["last_sample"])
-    assert held <= MAX_PHRASE_TIMEOUT, f"buffer grew to {held:.1f}s, cap is {MAX_PHRASE_TIMEOUT}s"
+    held = t.segmenters["Speaker"].active_duration_s
+    assert held <= cap + 1.0, f"buffer grew to {held:.1f}s against a {cap}s cap"
 
 
-def test_buffer_cap_leaves_short_phrases_alone():
+def test_clear_resets_segmenters_and_trackers():
     t = make_transcriber(speaker=FakeSource())
-    info = t.audio_sources["Speaker"]
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    t.trackers["Speaker"].update("hello world")
+    t.trackers["Speaker"].update("hello world again")
+    assert t.trackers["Speaker"].committed
 
-    t.update_last_sample_and_phrase_status("Speaker", pcm(2.0), now)
-    t._enforce_buffer_cap("Speaker", info, now)
-
-    assert t._sample_seconds("Speaker", info["last_sample"]) == pytest.approx(2.0, abs=0.05)
-    assert info["new_phrase"] is True  # untouched initial state
+    t.clear_transcript_data()
+    assert t.trackers["Speaker"].committed == ""
+    assert t.segmenters["Speaker"].active_duration_s == 0
 
 
 # --------------------------------------------------------------------------
