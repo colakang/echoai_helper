@@ -131,41 +131,46 @@ class ResponseManager:
                 # 获取combined messages
                 combined_messages = list(structured_transcript.get("combined", []))
                 
-                # 提取speaker类型的消息
+                # 分离speaker和其他类型的消息
                 speaker_messages = []
                 other_messages = []
-                print (f'Combined: {combined_messages}')
-                print (f'---------------')
-                # 分离speaker和其他类型的消息
                 for msg in combined_messages:
                     text, timestamp, response_id, speaker_type = msg
                     if speaker_type == "speaker":
                         speaker_messages.append(msg)
                     else:
                         other_messages.append(msg)
-                
-                # 如果有speaker消息，进行response_id前移处理
+
+                # response_id 前移处理
+                #
+                # NOTE: combined is newest-first, so this hands each speaker
+                # message the response_id of the message *after* it in time,
+                # and drops the newest message's own response entirely. That
+                # looks like an off-by-one, but it predates this change and
+                # altering it would silently change the shape of every export,
+                # so it is preserved verbatim pending a decision.
+                #
+                # The bug fixed here is narrower: new_speaker_messages was
+                # only bound inside `if speaker_messages:` yet used
+                # unconditionally below, so exporting a conversation with no
+                # speaker messages (mic-only, which is every recording made on
+                # a machine with no loopback) raised UnboundLocalError. The
+                # outer handler swallowed it and returned {}, which the UI
+                # reported as "no conversation data available" -- a silent,
+                # misleading failure on the one path meeting notes depend on.
+                new_speaker_messages = []
                 if speaker_messages:
-                    # 获取所有response_ids
-                    response_ids = [msg[2] for msg in speaker_messages]  # [id1, id2, id3, ...]
-                    
-                    # 创建一个新的空response id
-                    #new_first_id = response_ids[0]  # 保存第一个id用于复制
-                    
-                    # 后移response_ids
-                    shifted_response_ids = [None] + response_ids[0:]   # [None,id1,id2, id3, ..., ]
-                    
-                    # 更新speaker_messages的response_ids
-                    new_speaker_messages = []
+                    response_ids = [msg[2] for msg in speaker_messages]
+                    shifted_response_ids = [None] + response_ids[0:]
                     for i, msg in enumerate(speaker_messages):
                         text, timestamp, _, speaker_type = msg
-                        new_response_id = shifted_response_ids[i]
-                        new_speaker_messages.append((text, timestamp, new_response_id, speaker_type))
-                    
+                        new_speaker_messages.append(
+                            (text, timestamp, shifted_response_ids[i], speaker_type)
+                        )
+
                 # 根据时间戳合并消息
                 all_messages = []
                 all_messages.extend(new_speaker_messages)
-                #all_messages.extend(speaker_messages)
                 all_messages.extend(other_messages)
                 # 按时间戳排序
                 all_messages.sort(key=lambda x: x[1])

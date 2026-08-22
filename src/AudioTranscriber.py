@@ -110,6 +110,38 @@ class AudioTranscriber:
                 else:
                     print("\r "+who_spoke+" text: Null, New_Phrase:"+str(source_info["new_phrase"])+"\r\n")
 
+                self._enforce_buffer_cap(who_spoke, source_info, time_spoken)
+
+    def _sample_seconds(self, who_spoke, sample: bytes) -> float:
+        """How many seconds of audio a raw PCM buffer holds."""
+        info = self.audio_sources[who_spoke]
+        bytes_per_second = info["sample_rate"] * info["channels"] * info["sample_width"]
+        return len(sample) / bytes_per_second if bytes_per_second else 0.0
+
+    def _enforce_buffer_cap(self, who_spoke, source_info, time_spoken) -> None:
+        """
+        Hard ceiling on how much audio one phrase may accumulate.
+
+        last_sample only ever shrinks in _reset_source_info, which runs from
+        update_transcript -- and update_transcript is only reached when the
+        model returns usable text. Audio that clears the capture energy gate
+        but yields no transcript (music, keyboard noise, a fan, non-speech
+        chatter) therefore accumulates forever: the buffer grows without
+        bound, and every subsequent chunk re-transcribes all of it.
+
+        Unnoticeable in a five-minute demo, fatal in the 1-2 hour meetings
+        this is now aimed at. MAX_PHRASE_TIMEOUT has been declared since the
+        first commit but never enforced; enforce it.
+        """
+        held = self._sample_seconds(who_spoke, source_info["last_sample"])
+        if held <= MAX_PHRASE_TIMEOUT:
+            return
+
+        print(f"[WARN] {who_spoke}: buffer hit the {MAX_PHRASE_TIMEOUT}s cap "
+              f"({held:.1f}s held) without a phrase break — forcing one.")
+        source_info["new_phrase"] = True
+        self._reset_source_info(source_info, time_spoken)
+
     def _transcribe_audio(self, audio_np):
         """
         Modularized transcription method for future streaming compatibility.
@@ -151,9 +183,12 @@ class AudioTranscriber:
         source_info = self.audio_sources[who_spoke]
         target_sample_rate = 16000  # FunASR expects 16kHz
 
-        audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
-        if audio_np.size == 0:
+        # Trim to a whole number of int16 samples: np.frombuffer raises on a
+        # ragged buffer, which would kill the transcription thread outright.
+        usable_bytes = len(audio_bytes) - (len(audio_bytes) % 2)
+        if usable_bytes == 0:
             return np.zeros(0, dtype=np.float32)
+        audio_np = np.frombuffer(audio_bytes[:usable_bytes], dtype=np.int16)
 
         # --- down-mix to mono ---
         channels = int(source_info["channels"])
