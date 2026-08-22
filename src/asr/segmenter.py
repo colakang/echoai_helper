@@ -112,7 +112,6 @@ class SpeechSegmenter:
 
         self._leftover = np.zeros(0, dtype=np.float32)
         self._speech: List[np.ndarray] = []
-        self._pre_pad: List[np.ndarray] = []      # windows before speech began
         self._trailing_silence: List[np.ndarray] = []
         self._in_speech = False
         self._silence_ms = 0
@@ -131,7 +130,7 @@ class SpeechSegmenter:
 
     @property
     def active_audio(self) -> np.ndarray:
-        """The utterance so far, for live partial transcription."""
+        """Everything buffered since the last cut, for live partials."""
         if not self._speech:
             return np.zeros(0, dtype=np.float32)
         return np.concatenate(self._speech)
@@ -164,45 +163,34 @@ class SpeechSegmenter:
         return events
 
     def _consume_window(self, window: np.ndarray) -> List[tuple]:
+        """
+        Accumulate every window. VAD decides *where to cut*, never *what to
+        keep* -- an earlier design dropped anything it judged non-speech and
+        lost 22-28% of three real recordings, including whole audible
+        sentences. For meeting notes, losing audio
+        is far worse than a ragged boundary.
+        """
         events: List[tuple] = []
         probability = float(self.vad.process_chunk(window))
+        is_speech = probability >= (
+            self.config.speech_threshold if not self._in_speech
+            else self.config.silence_threshold
+        )
 
-        if not self._in_speech:
-            # Rolling pre-roll so an onset is not clipped.
-            self._pre_pad.append(window)
-            if len(self._pre_pad) > self._pad_windows:
-                self._pre_pad.pop(0)
-
-            if probability >= self.config.speech_threshold:
+        self._speech.append(window)
+        if is_speech:
+            if not self._in_speech:
                 self._in_speech = True
-                self._speech = list(self._pre_pad)
-                self._pre_pad = []
-                self._trailing_silence = []
-                self._speech_ms = 100
-                self._silence_ms = 0
-                self._segment_start_s = self._position_s - (
-                    len(self._speech) * 100 / 1000
-                )
                 events.append((Event.SPEECH_START, None))
-            return events
-
-        # In speech.
-        if probability >= self.config.silence_threshold:
-            # Still talking; any buffered near-silence was an intra-word gap.
-            if self._trailing_silence:
-                self._speech.extend(self._trailing_silence)
-                self._speech_ms += 100 * len(self._trailing_silence)
-                self._trailing_silence = []
-            self._speech.append(window)
-            self._speech_ms += 100
+            self._speech_ms += 100 + 100 * len(self._trailing_silence)
+            self._trailing_silence = []
             self._silence_ms = 0
         else:
-            # Hold the silence aside: if speech resumes it belongs to this
-            # utterance, and if it does not only the pad is kept.
+            # Track the run of quiet, but the audio itself is already kept.
             self._trailing_silence.append(window)
             self._silence_ms += 100
 
-            if self._silence_ms >= self.config.min_silence_ms:
+            if self._in_speech and self._silence_ms >= self.config.min_silence_ms:
                 segment = self._close_segment()
                 if segment is not None:
                     events.append((Event.SPEECH_END, segment))
@@ -216,37 +204,74 @@ class SpeechSegmenter:
         return events
 
     def _close_segment(self, forced: bool = False) -> Optional[Segment]:
-        keep = self._trailing_silence[:self._pad_windows]
-        audio = self._speech + keep
+        """
+        Cut in the middle of the trailing silence, so the pause is split
+        between this segment and the next and no sample belongs to neither.
+        """
+        if forced:
+            keep, carry = self._speech, []
+        else:
+            split = max(len(self._trailing_silence) // 2, self._pad_windows)
+            split = min(split, len(self._trailing_silence))
+            boundary = len(self._speech) - len(self._trailing_silence) + split
+            keep = self._speech[:boundary]
+            carry = self._speech[boundary:]
 
         speech_ms = self._speech_ms
         start_s = self._segment_start_s
-        end_s = start_s + sum(len(w) for w in audio) / SAMPLE_RATE
+        kept_s = sum(len(w) for w in keep) / SAMPLE_RATE
 
         self._in_speech = False
-        self._speech = []
         self._trailing_silence = []
         self._silence_ms = 0
         self._speech_ms = 0
-        # A forced cut lands mid-utterance, so treat its tail as the pre-roll
-        # of whatever comes next rather than dropping it.
-        self._pre_pad = list(keep) if forced else []
+        self._segment_start_s = start_s + kept_s
+        self._speech = list(carry)
 
-        if speech_ms < self.config.min_speech_ms or not audio:
+        if not keep:
             return None
-        return Segment(audio=np.concatenate(audio), start_s=start_s, end_s=end_s)
+
+        if speech_ms < self.config.min_speech_ms:
+            # Too short to stand alone -- but it is still audio, so hand it
+            # to the next segment rather than discarding it. Dropping short
+            # utterances is how the previous design lost speech.
+            self._speech = list(keep) + list(carry)
+            self._segment_start_s = start_s
+            return None
+
+        return Segment(audio=np.concatenate(keep), start_s=start_s,
+                       end_s=start_s + kept_s)
 
     def flush(self) -> Optional[Segment]:
-        """End the utterance in progress, e.g. when capture stops."""
-        if not self._in_speech:
+        """
+        Emit whatever is buffered, e.g. when capture stops.
+
+        Ignores min_speech_ms: at end of stream there is no next segment to
+        carry a short tail into, so enforcing it would silently drop the
+        last words spoken.
+        """
+        if not self._speech:
             return None
-        return self._close_segment()
+        audio = np.concatenate(self._speech)
+        start_s = self._segment_start_s
+        duration = len(audio) / SAMPLE_RATE
+
+        had_speech = self._in_speech or self._speech_ms > 0
+        self._speech = []
+        self._trailing_silence = []
+        self._in_speech = False
+        self._silence_ms = 0
+        self._speech_ms = 0
+        self._segment_start_s = start_s + duration
+
+        if not had_speech:
+            return None
+        return Segment(audio=audio, start_s=start_s, end_s=start_s + duration)
 
     def reset(self) -> None:
         self.vad.reset()
         self._leftover = np.zeros(0, dtype=np.float32)
         self._speech = []
-        self._pre_pad = []
         self._trailing_silence = []
         self._in_speech = False
         self._silence_ms = 0

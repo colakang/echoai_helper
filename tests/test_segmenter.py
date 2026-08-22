@@ -189,3 +189,114 @@ def test_flush_closes_an_open_utterance():
     assert segment is not None
     assert not segmenter.in_speech
     assert segmenter.flush() is None
+
+
+# --------------------------------------------------------------------------
+# Coverage: the invariant that matters most
+# --------------------------------------------------------------------------
+#
+# An earlier design treated the VAD as a filter and discarded anything it
+# judged non-speech. Measured against three real recordings it lost 22-28% of
+# the audio, including whole audible sentences. For meeting notes, dropping
+# speech is far worse than a ragged boundary, so the segmenter now decides
+# only *where to cut*, never *what to keep*.
+
+def _total_samples(segments):
+    return sum(len(s.audio) for s in segments)
+
+
+def assert_speech_is_covered(segments, probabilities, threshold=0.35):
+    """
+    Every window up to and including the last speech-bearing one must be
+    accounted for.
+
+    Not "every sample is emitted": trailing silence after the last word is
+    correctly discarded (see test_pure_silence_still_produces_nothing). The
+    invariant is that no *speech* is lost, which is what the earlier design
+    violated.
+    """
+    speech_indices = [i for i, p in enumerate(probabilities) if p >= threshold]
+    if not speech_indices:
+        return
+    required = (speech_indices[-1] + 1) * WINDOW_SAMPLES
+    got = _total_samples(segments)
+    assert got >= required, (
+        f"lost {(required - got) / WINDOW_SAMPLES:.0f} windows of audio "
+        f"({got} samples emitted, {required} needed to cover all speech)"
+    )
+
+
+def collect(probabilities, config=None, chunk_windows=None):
+    """Run to completion and return every emitted segment, flush included."""
+    vad = ScriptedVAD(probabilities)
+    segmenter = SpeechSegmenter(vad, config)
+    audio = audio_for(len(probabilities))
+    segments = []
+
+    step = chunk_windows * WINDOW_SAMPLES if chunk_windows else len(audio)
+    for i in range(0, len(audio), step):
+        for event, segment in segmenter.process(audio[i:i + step]):
+            if event is Event.SPEECH_END:
+                segments.append(segment)
+    tail = segmenter.flush()
+    if tail is not None:
+        segments.append(tail)
+    return segments
+
+
+def test_no_audio_is_lost_between_utterances():
+    """Speech, pause, speech: the pause belongs to one side or the other,
+    never to neither."""
+    probabilities = [0.9] * 10 + [0.0] * 10 + [0.9] * 10
+    segments = collect(probabilities)
+    assert_speech_is_covered(segments, probabilities)
+
+
+def test_no_audio_is_lost_with_quiet_speech():
+    """The regression that started this: a passage the VAD scores below the
+    entry threshold is still audio and must survive."""
+    probabilities = [0.9] * 8 + [0.2] * 12 + [0.9] * 8 + [0.0] * 10
+    segments = collect(probabilities)
+    assert_speech_is_covered(segments, probabilities, threshold=0.15)
+
+
+def test_short_utterance_is_carried_forward_not_dropped():
+    """Below min_speech_ms it does not become its own segment, but its audio
+    joins the next one."""
+    config = SegmenterConfig(min_speech_ms=900)
+    probabilities = [0.9] * 3 + [0.0] * 10 + [0.9] * 15 + [0.0] * 10
+    segments = collect(probabilities, config)
+
+    assert len(segments) >= 1
+    assert_speech_is_covered(segments, probabilities)
+
+
+def test_segments_tile_the_timeline_without_gaps():
+    probabilities = ([0.9] * 8 + [0.0] * 10) * 3
+    segments = collect(probabilities)
+    for earlier, later in zip(segments, segments[1:]):
+        assert later.start_s == pytest.approx(earlier.end_s, abs=1e-6), (
+            f"gap between {earlier.end_s:.2f}s and {later.start_s:.2f}s"
+        )
+
+
+def test_coverage_holds_across_recorder_chunk_boundaries():
+    probabilities = [0.9] * 10 + [0.0] * 10 + [0.9] * 10 + [0.0] * 10
+    whole = collect(probabilities)
+    piecemeal = collect(probabilities, chunk_windows=6)   # 0.6s recorder chunks
+    assert _total_samples(whole) == _total_samples(piecemeal)
+    assert_speech_is_covered(piecemeal, probabilities)
+
+
+def test_flush_ignores_min_speech_so_the_last_words_survive():
+    """At end of stream there is no next segment to carry a short tail into;
+    enforcing the minimum there would silently drop the final utterance."""
+    config = SegmenterConfig(min_speech_ms=900)
+    segments = collect([0.9] * 3, config)      # 300ms of speech, then nothing
+    assert len(segments) == 1
+    assert _total_samples(segments) == 3 * WINDOW_SAMPLES
+
+
+def test_pure_silence_still_produces_nothing():
+    """Coverage must not mean transcribing an empty room."""
+    assert collect([0.0] * 30) == []
