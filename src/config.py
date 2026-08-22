@@ -59,30 +59,65 @@ class EnvConfig:
             cls._instance = super().__new__(cls)
         return cls._instance
     
+    # Files holding nothing but the API key itself, checked before .env.
+    # Keeping the secret in one place beats copying it into a second file;
+    # every one of these must stay in .gitignore.
+    KEY_FILES = ('.llm', '.openai_key')
+
+    @classmethod
+    def _load_bare_key_file(cls, root: str) -> bool:
+        """Read a file whose entire contents are the API key. Returns True on success."""
+        for name in cls.KEY_FILES:
+            path = os.path.join(root, name)
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    key = f.read().strip()
+            except Exception as e:
+                print(f"Error reading {path}: {e}")
+                continue
+            if not key:
+                continue
+            # Tolerate `OPENAI_API_KEY=sk-...` as well as a bare `sk-...`.
+            if '=' in key.split('\n')[0]:
+                key = key.split('\n')[0].split('=', 1)[1].strip().strip('"\'')
+            os.environ['OPENAI_API_KEY'] = key
+            print(f"[INFO] Loaded OpenAI key from {name}")
+            return True
+        return False
+
     @classmethod
     def initialize(cls) -> None:
         """初始化环境配置"""
         if cls._initialized:
             return
-        
+
+        root = PathConfig.get_project_root()
+
+        # 优先读裸密钥文件（.llm 等），其次 .env
+        if cls._load_bare_key_file(root):
+            cls._initialized = True
+            return
+
         # 获取.env文件路径
-        env_path = os.path.join(PathConfig.get_project_root(), '.env')
-        
+        env_path = os.path.join(root, '.env')
+
         # 如果.env文件不存在，创建它
         if not os.path.exists(env_path):
             cls.create_env_template(env_path)
             print(f"Please set your OpenAI API key in {env_path}")
             return
-        
+
         # 加载.env文件
         load_dotenv(env_path)
-        
+
         # 验证API密钥
         if not os.getenv('OPENAI_API_KEY'):
             print(f"OPENAI_API_KEY not found in {env_path}")
             print("Please add your OpenAI API key to the .env file")
             return
-        
+
         cls._initialized = True
     
     @classmethod

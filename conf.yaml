@@ -5,8 +5,13 @@ FunASR:
   model_name: "iic/SenseVoiceSmall" # or "paraformer-zh" or "iic/SenseVoiceSmall" or "FunAudioLLM/Fun-ASR-Nano-2512"
   #vad_model: "fsmn-vad" # this is only used to make it works if audio is longer than 30s
   punc_model: "ct-punc" # punctuation model.
-  device: "cpu"
-  ncpu: 4 # number of threads for CPU internal operations.
+  # "mps" = Apple Silicon Metal. On an M4 this is ~5x faster than "cpu" and is
+  # the difference between keeping up and falling behind: measured over one
+  # 6.2s phrase in accumulate mode (10 calls), dual-track effective RTF is
+  # 2.04 on cpu (falls behind 2x) versus 0.35 on mps.
+  # Use "cpu" on Intel Macs / Windows without CUDA, "cuda" with an NVIDIA GPU.
+  device: "mps"
+  ncpu: 4 # number of threads for CPU internal operations (ignored on mps/cuda).
   hub: "ms" # ms (default) to download models from ModelScope. Use hf to download models from Hugging Face.
   use_itn: True
   language: "en" # zh, en, auto

@@ -24,12 +24,31 @@ class FunASRTranscriber:
         with open(f"{PathConfig.get_project_root()}/conf.yaml", "rb") as f:
             self.config = yaml.safe_load(f)
 
-        asr_model = "FunASR"
+        # Honour ASR_MODEL from conf.yaml instead of hardcoding "FunASR",
+        # which silently ignored the setting and made switching backends a
+        # no-op.
+        asr_model = self.config.get("ASR_MODEL", "FunASR")
         asr_config = self.config.get(asr_model, {})
 
         self.audio_model = ASRFactory.get_asr_system(asr_model, **asr_config)
 
-        print(f"[INFO] FunASR using GPU: " + str(torch.cuda.is_available()))
+        device = asr_config.get("device", "cpu")
+        accel = {
+            "mps": torch.backends.mps.is_available(),
+            "cuda": torch.cuda.is_available(),
+        }.get(device, False)
+        print(f"[INFO] {asr_model} on device={device!r} "
+              f"(accelerator available: {accel})")
+
+        # First inference on Metal pays kernel-compilation cost (~1.3s) that
+        # would otherwise land on the user's first spoken phrase. Burn it here.
+        if device == "mps":
+            try:
+                import numpy as _np
+                self.audio_model.transcribe_np(_np.zeros(16000, dtype=_np.float32))
+                print("[INFO] MPS warmup complete")
+            except Exception as e:
+                print(f"[WARN] MPS warmup failed (non-fatal): {e}")
 
     def init_asr(self) -> ASRInterface:
         asr_model = self.config.get("ASR_MODEL")

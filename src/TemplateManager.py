@@ -4,6 +4,7 @@ src/template_manager.py
 """
 
 import os
+import re
 import glob
 import traceback
 from typing import List, Optional, Tuple, Dict
@@ -75,17 +76,36 @@ class TemplateManager:
 
     @classmethod
     def load_template(cls, filepath: str) -> str:
-        """加载模板文件内容"""
+        """
+        加载模板文件内容
+
+        system_role templates live in .py files that assign a triple-quoted
+        string to a name, but they are read as plain text and never imported.
+        Read naively, the assignment syntax ends up inside the system prompt
+        sent to the model: prompts were starting with the literal text
+        `SYSTEM_ROLE =` followed by an opening triple quote. Unwrap it here.
+        """
         try:
             with open(filepath, 'r', encoding='utf-8') as file:
                 content = file.read()
                 if not content.strip():
                     print(f"Warning: Template file is empty: {filepath}")
-                return content
+                return cls._unwrap_python_string(content)
         except Exception as e:
             print(f"Error loading template {filepath}: {e}")
             traceback.print_exc()
             return ""
+
+    @staticmethod
+    def _unwrap_python_string(content: str) -> str:
+        """If the whole file is one `NAME = <triple-quoted string>` assignment,
+        return just the string body. Anything else is returned untouched."""
+        match = re.match(
+            r'''\s*[A-Za-z_]\w*\s*=\s*(?P<q>"""|\'\'\')(?P<body>.*)(?P=q)\s*\Z''',
+            content,
+            re.DOTALL,
+        )
+        return match.group('body').strip() if match else content
 
     @classmethod
     def get_template_files(cls, category: str) -> List[str]:
