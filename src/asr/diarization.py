@@ -173,6 +173,10 @@ class SpeakerEmbedder:
         self.device = device
         self._model = None
 
+    @property
+    def ready(self) -> bool:
+        return self._model is not None
+
     def _ensure_model(self):
         if self._model is None:
             from funasr import AutoModel

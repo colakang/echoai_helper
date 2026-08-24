@@ -128,6 +128,7 @@ class AudioTranscriber:
         self._embedder = SpeakerEmbedder(device=_asr_device())
         self._registries = {name: SpeakerRegistry() for name in self.audio_sources}
 
+
     def transcribe_audio_queue(self, audio_queue):
         """
         One thread per track. Audio is segmented on speech pauses rather than
@@ -221,6 +222,17 @@ class AudioTranscriber:
                     and not SystemConfig.get_record_only_mode()):
                 self.transcript_changed_event.set()
 
+    def preload_speaker_model(self) -> bool:
+        """Load the embedding model off the transcription path."""
+        try:
+            self._embedder._ensure_model()
+            print("[INFO] Speaker embedding model ready")
+            return True
+        except Exception as e:
+            print(f"[WARN] Speaker embedding unavailable: {e}")
+            AudioConfig.set_diarization(False)
+            return False
+
     def _identify_speaker(self, who_spoke, segment):
         """
         Which of the voices on this track just spoke, or None.
@@ -238,6 +250,13 @@ class AudioTranscriber:
         if segment.duration_s < config.min_duration_s:
             # Too short for a reliable embedding, the same way it is too short
             # for reliable language detection.
+            return None
+
+        if not self._embedder.ready:
+            # Never block the transcription thread on a model load. The
+            # first attempt used to trigger a lazy download and Metal warmup
+            # inside the handling of an utterance, stalling that track for
+            # 20s or more; preloading happens off this path instead.
             return None
 
         embedding = self._embedder.embed(segment.audio)

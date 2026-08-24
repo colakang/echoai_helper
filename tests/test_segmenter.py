@@ -300,3 +300,45 @@ def test_flush_ignores_min_speech_so_the_last_words_survive():
 def test_pure_silence_still_produces_nothing():
     """Coverage must not mean transcribing an empty room."""
     assert collect([0.0] * 30) == []
+
+
+def test_long_silence_does_not_become_an_utterance():
+    """
+    A blip of speech after a long quiet stretch used to credit the entire
+    stretch as speech, because the whole trailing-silence run was folded into
+    speech_ms. The hard cap then emitted a 25s "utterance" that was almost
+    entirely room tone and transcribed to ".". Observed live on a Bluetooth
+    headset mic, whose noise floor clears the capture energy gate so silent
+    chunks keep arriving.
+    """
+    config = SegmenterConfig(max_segment_s=3.0, min_speech_ms=700)
+    probabilities = [0.0] * 40 + [0.9] * 1 + [0.0] * 20
+    segments = collect(probabilities, config)
+
+    for segment in segments:
+        assert segment.duration_s <= 2.0, (
+            f"emitted a {segment.duration_s:.1f}s segment for 100ms of speech"
+        )
+
+
+def test_silence_only_buffer_does_not_grow_without_bound():
+    """The forced cut used to hand the whole buffer straight back, so a quiet
+    room grew it forever."""
+    config = SegmenterConfig(max_segment_s=2.0)
+    vad = ScriptedVAD([0.0] * 200)
+    segmenter = SpeechSegmenter(vad, config)
+    segmenter.process(audio_for(200))          # 20s of nothing
+
+    assert segmenter.active_duration_s <= config.max_segment_s, (
+        f"buffer holds {segmenter.active_duration_s:.1f}s of silence"
+    )
+
+
+def test_speech_after_long_silence_is_still_captured():
+    """Discarding room tone must not eat the speech that follows it."""
+    config = SegmenterConfig(max_segment_s=3.0)
+    probabilities = [0.0] * 50 + [0.9] * 12 + [0.0] * 10
+    segments = collect(probabilities, config)
+
+    assert segments, "speech after a long silence was lost entirely"
+    assert sum(s.duration_s for s in segments) >= 1.0

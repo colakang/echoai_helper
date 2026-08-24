@@ -398,6 +398,11 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         enabled = diarize_var.get()
         AudioConfig.set_diarization(enabled)
         settings_manager.update_setting("diarization", enabled)
+        if enabled:
+            # Warm it here rather than inside the next utterance, where the
+            # load would stall transcription for 20s or more.
+            threading.Thread(target=transcriber.preload_speaker_model,
+                             daemon=True).start()
 
     diarize_checkbox = ctk.CTkCheckBox(
         controls_frame,
@@ -590,6 +595,12 @@ def main():
     
     SystemConfig.set_record_only_mode(settings_manager.get_setting("record_only_mode"))
     AudioConfig.set_diarization(settings_manager.get_setting("diarization"))
+    if AudioConfig.get_diarization():
+        # Off the main thread: loading it costs ~20s the first time, and the
+        # UI should come up regardless. Segments transcribe unlabelled until
+        # it is ready rather than waiting for it.
+        threading.Thread(target=transcriber.preload_speaker_model,
+                         daemon=True).start()
 
     # Apply the saved transcription profile before the first chunk arrives.
     saved_profile = profiles.by_key(settings_manager.get_setting("profile"))

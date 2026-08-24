@@ -182,13 +182,23 @@ class SpeechSegmenter:
             if not self._in_speech:
                 self._in_speech = True
                 events.append((Event.SPEECH_START, None))
-            self._speech_ms += 100 + 100 * len(self._trailing_silence)
+            # Only a short gap counts as part of the utterance. Folding in the
+            # whole trailing run would credit minutes of room tone as speech:
+            # a single blip after a long quiet stretch made speech_ms jump by
+            # the length of that stretch, and the hard cap then emitted a 25s
+            # "utterance" that was almost entirely silence and transcribed to
+            # ".". Anything longer than min_silence_ms would have ended the
+            # segment anyway, so it can never legitimately be speech.
+            gap_windows = min(len(self._trailing_silence),
+                              self.config.min_silence_ms // 100)
+            self._speech_ms += 100 + 100 * gap_windows
             self._trailing_silence = []
             self._silence_ms = 0
         else:
             # Track the run of quiet, but the audio itself is already kept.
             self._trailing_silence.append(window)
             self._silence_ms += 100
+
 
             if self._in_speech and self._silence_ms >= self.config.min_silence_ms:
                 segment = self._close_segment()
@@ -231,10 +241,21 @@ class SpeechSegmenter:
         if not keep:
             return None
 
+        if speech_ms == 0:
+            # Nothing was ever said here: room tone only. Discard all but the
+            # pre-roll. Carrying it forward would let the buffer grow for as
+            # long as the room stays quiet -- the hard cut would restore the
+            # whole thing every time -- and would drag that silence into
+            # whatever is eventually spoken.
+            self._speech = list(keep[-self._pad_windows:]) + list(carry)
+            self._segment_start_s = (start_s + kept_s
+                                     - min(self._pad_windows, len(keep)) * 0.1)
+            return None
+
         if speech_ms < self.config.min_speech_ms:
-            # Too short to stand alone -- but it is still audio, so hand it
-            # to the next segment rather than discarding it. Dropping short
-            # utterances is how the previous design lost speech.
+            # Too short to stand alone -- but somebody spoke, so hand it to
+            # the next segment rather than discarding it. Dropping short
+            # utterances is how an earlier design lost speech.
             self._speech = list(keep) + list(carry)
             self._segment_start_s = start_s
             return None
