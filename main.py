@@ -21,7 +21,7 @@ from src.ResponseManager import ResponseManager
 from src.SettingsManager import SettingsManager
 from src.TemplateManager import TemplateManager
 import src.TranscriberModels as TranscriberModels
-from src.config import EnvConfig, SystemConfig, AudioConfig
+from src.config import EnvConfig, SystemConfig, AudioConfig, PathConfig
 from src import profiles
 from src.TranscriptUI import TranscriptUI
 #import torch
@@ -60,6 +60,57 @@ def update_response_UI(responder, textbox, freeze_state, transcript_ui):
                   transcript_ui)
 
     
+def _polish_before_export(conversation_data):
+    """
+    Clean the transcript in place and describe what happened.
+
+    Runs here rather than during the meeting: one request per batch instead of
+    one per utterance, the model gets to see the surrounding conversation, and
+    nobody is waiting on it -- which is also what makes the CLI provider, at
+    roughly 4s a call, a sensible backend for this and not for live prompting.
+
+    Never fatal. A transcript that failed to be cleaned is still a transcript,
+    and refusing to export it because the model was unavailable would be the
+    worse outcome.
+    """
+    try:
+        from src.polish import polish_transcript
+        from src.llm import create_llm_provider
+        import yaml
+
+        with open(f"{PathConfig.get_project_root()}/conf.yaml", "rb") as f:
+            llm_config = (yaml.safe_load(f) or {}).get("LLM", {})
+
+        provider_type = llm_config.get("provider", "openai").lower()
+        if provider_type == "openai":
+            provider_config = {
+                "api_key": EnvConfig.get_openai_key(),
+                "model": llm_config.get("openai", {}).get("model", "gpt-4o-mini"),
+            }
+        else:
+            provider_config = dict(llm_config.get(provider_type, {}))
+
+        provider = create_llm_provider(provider_type, provider_config)
+        if provider is None:
+            return "\n\nCleanup skipped: no language model configured."
+
+        messages = conversation_data["conversation"]["messages"]
+        result = polish_transcript(messages, provider)
+        conversation_data["conversation"]["messages"] = result.segments
+        conversation_data.setdefault("metadata", {})["cleanup"] = {
+            "model": provider.get_model_name(),
+            "lines_cleaned": result.polished_count,
+            "batches_failed": result.batches_failed,
+        }
+        return f"\n\nCleanup: {result.summary()}"
+
+    except Exception as e:
+        print(f"Transcript cleanup failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"\n\nCleanup failed ({e}); original transcript saved."
+
+
 def clear_context(transcriber, mic_queue, speaker_queue, transcript_ui):
     """
     Phase 2: 清除所有上下文（双队列版本）
@@ -208,6 +259,16 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
             )
             
             if filepath:
+                polish_note = ""
+                if messagebox.askyesno(
+                        "Clean up transcript?",
+                        "Run the transcript through the language model to fix "
+                        "speech-recognition errors before saving?\n\n"
+                        "The original text of every line is kept either way; "
+                        "corrections are stored alongside it.\n\n"
+                        "This can take a minute on a long meeting."):
+                    polish_note = _polish_before_export(conversation_data)
+
                 success = response_manager.save_structured_conversation(
                     filepath, 
                     conversation_data
@@ -225,6 +286,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
                         f"Conversation data has been saved to:\n{filepath}\n\n"
                         f"Total messages: {total_messages}\n"
                         f"Messages with responses: {messages_with_responses}"
+                        + polish_note
                     )
                 else:
                     messagebox.showerror(

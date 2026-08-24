@@ -25,15 +25,25 @@ key to hand it.
 """
 
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from typing import Dict, Generator, List, Optional
 
 from .llm_provider import LLMProvider
 
 # Generous: a cold CLI start plus a long answer. Better to wait than to
-# truncate a reply that was nearly finished.
-DEFAULT_TIMEOUT_S = 90
+# truncate a reply that was nearly finished. A 25-line polish batch measured
+# 20s here, so this leaves ample headroom for a slow response.
+DEFAULT_TIMEOUT_S = 300
+
+# Tools these agents would otherwise be free to reach for. They are here to
+# answer a question about a transcript, not to touch the machine, and every
+# tool they consider costs a round trip: an 8-line batch took 70s with them
+# available and 20s for 25 lines without.
+NO_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep",
+            "WebFetch", "WebSearch", "Task", "TodoWrite", "NotebookEdit"]
 
 
 class CLIProvider(LLMProvider):
@@ -42,7 +52,7 @@ class CLIProvider(LLMProvider):
     COMMANDS = {
         # `claude -p` is the documented non-interactive mode.
         "claude": {
-            "argv": ["claude", "-p"],
+            "argv": ["claude", "-p", "--disallowed-tools", ",".join(NO_TOOLS)],
             "stdin": True,
         },
         # codex refuses to run outside a trusted directory unless told not to
@@ -97,13 +107,20 @@ class CLIProvider(LLMProvider):
         argv += self.extra_args
 
         try:
-            completed = subprocess.run(
-                argv,
-                input=flatten(messages),
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-            )
+            # Run from an empty directory. These CLIs read the working
+            # directory as project context -- CLAUDE.md, the repo, whatever is
+            # around -- and none of it is relevant to answering a question
+            # about a transcript. Left in the project directory, an 8-line
+            # batch took over 90s and timed out.
+            with tempfile.TemporaryDirectory(prefix="echoai-llm-") as workdir:
+                completed = subprocess.run(
+                    argv,
+                    input=flatten(messages),
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                    cwd=workdir,
+                )
         except subprocess.TimeoutExpired:
             raise RuntimeError(
                 "{} did not answer within {}s".format(self.command, self.timeout))
