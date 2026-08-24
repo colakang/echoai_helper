@@ -529,11 +529,19 @@ def main():
     print(f"[INFO] Audio backend: {backend.name}")
 
     user_audio_recorder = backend.create_mic_recorder()
+    speaker_audio_recorder = backend.create_speaker_recorder()
+
+    # Measure each device's noise floor before opening its stream. A fixed
+    # gate cannot serve both a line-level loopback and a Bluetooth headset,
+    # whose HFP hiss alone measures RMS 331 against a default of 100 -- every
+    # "silent" chunk was reaching the transcriber.
+    for recorder in (user_audio_recorder, speaker_audio_recorder):
+        if recorder is not None and hasattr(recorder, "calibrate"):
+            recorder.calibrate()
+
     if user_audio_recorder is not None:
         user_audio_recorder.record_into_queue(mic_queue)
-        time.sleep(2)
 
-    speaker_audio_recorder = backend.create_speaker_recorder()
     if speaker_audio_recorder is not None:
         speaker_audio_recorder.record_into_queue(speaker_queue)
 

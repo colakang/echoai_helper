@@ -22,10 +22,31 @@ import queue
 # `phrase_time_limit` so downstream phrase timing is unchanged.
 RECORD_TIMEOUT = 0.6
 
-# RMS gate on int16 samples.  Chunks quieter than this never reach the ASR
-# model — silence is the single biggest source of wasted inference and of
-# hallucinated transcripts.
+# RMS floor on int16 samples. Chunks quieter than this never leave the
+# recorder.
+#
+# This is only a cheap pre-filter -- the VAD makes the real speech/silence
+# decision downstream -- but it has to actually sit above the device's noise
+# floor to do anything. 100 comes from the original Windows path and is far
+# too low for a Bluetooth headset in HFP mode: one measured RMS 331 in a
+# silent room, so every "silent" chunk was queued and the buffer filled with
+# room tone.
+#
+# Rather than pick a number that suits one microphone, the floor is measured
+# at startup and the gate placed above it. Mirrors what the Windows recorder
+# already did through adjust_for_ambient_noise.
 ENERGY_THRESHOLD = 100
+
+# Multiple of the measured noise floor to sit above. 2.0 leaves quiet speech
+# comfortably clear while excluding steady hiss.
+NOISE_FLOOR_MARGIN = 2.0
+
+# How long to listen to the room before deciding.
+CALIBRATION_S = 1.0
+
+# Never let calibration produce a gate so high that normal speech is lost,
+# e.g. when someone is already talking as the app starts.
+MAX_ENERGY_THRESHOLD = 1500
 
 
 class AudioSource:

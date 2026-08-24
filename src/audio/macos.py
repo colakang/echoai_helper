@@ -23,7 +23,8 @@ import sounddevice as sd
 
 from .backend import (
     AudioBackend, AudioSource, Recorder,
-    RECORD_TIMEOUT, ENERGY_THRESHOLD,
+    RECORD_TIMEOUT, ENERGY_THRESHOLD, NOISE_FLOOR_MARGIN,
+    CALIBRATION_S, MAX_ENERGY_THRESHOLD,
 )
 
 # Input devices whose name matches one of these are treated as a loopback of
@@ -66,6 +67,7 @@ class SoundDeviceRecorder(Recorder):
     def __init__(self, source: AudioSource, source_name: str, device_index: int):
         super().__init__(source, source_name)
         self.device_index = device_index
+        self.energy_threshold = ENERGY_THRESHOLD
         self._stream: Optional[sd.InputStream] = None
         self._queue: Optional[_queue.Queue] = None
         self._buffer = bytearray()
@@ -74,6 +76,35 @@ class SoundDeviceRecorder(Recorder):
         self._chunk_bytes = int(
             source.SAMPLE_RATE * RECORD_TIMEOUT
         ) * source.channels * SAMPLE_WIDTH
+
+    def calibrate(self, seconds: float = CALIBRATION_S) -> float:
+        """
+        Measure the device's noise floor and place the gate above it.
+
+        A fixed threshold cannot serve both a line-level loopback and a
+        Bluetooth headset whose HFP hiss alone measures RMS 331.
+        """
+        try:
+            frames = int(seconds * self.source.SAMPLE_RATE)
+            recording = sd.rec(frames, samplerate=self.source.SAMPLE_RATE,
+                               channels=self.source.channels, dtype="int16",
+                               device=self.device_index)
+            sd.wait()
+        except Exception as e:
+            print(f"[WARN] {self.source_name}: noise calibration failed "
+                  f"({e}); keeping default gate {self.energy_threshold}")
+            return self.energy_threshold
+
+        samples = np.asarray(recording, dtype=np.float64).reshape(-1)
+        if samples.size == 0:
+            return self.energy_threshold
+
+        floor = float(np.sqrt(np.mean(samples ** 2)))
+        proposed = max(ENERGY_THRESHOLD, floor * NOISE_FLOOR_MARGIN)
+        self.energy_threshold = min(proposed, MAX_ENERGY_THRESHOLD)
+        print(f"[INFO] {self.source_name}: noise floor {floor:.0f}, "
+              f"gate set to {self.energy_threshold:.0f}")
+        return self.energy_threshold
 
     def record_into_queue(self, audio_queue: "_queue.Queue") -> None:
         self._queue = audio_queue
@@ -109,7 +140,7 @@ class SoundDeviceRecorder(Recorder):
         # float64 accumulator: squaring int16 overflows int16 and would make
         # loud audio read as quiet.
         rms = float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
-        if rms < ENERGY_THRESHOLD:
+        if rms < self.energy_threshold:
             return
         # utcnow() is deprecated in 3.12; keep the naive-UTC value the rest of
         # the pipeline already assumes.
