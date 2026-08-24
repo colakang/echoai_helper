@@ -228,6 +228,20 @@ class AudioConfig:
     def set_profile(cls, key: str):
         cls._profile = key
 
+    # Label who is speaking on a track that carries several people. Costs one
+    # CAM++ embedding per segment (~293ms on an M4) on top of transcription,
+    # so it is opt-in: pointless for a one-to-one call, close to essential for
+    # a meeting transcript.
+    _diarization = False
+
+    @classmethod
+    def get_diarization(cls):
+        return cls._diarization
+
+    @classmethod
+    def set_diarization(cls, value: bool):
+        cls._diarization = bool(value)
+
     @classmethod
     def get_buffer_chunks(cls):
         return cls._buffer_chunks

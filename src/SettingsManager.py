@@ -26,7 +26,8 @@ class SettingsManager:
         "knowledge": "none",
         "window_opacity": 1.0,
         "window_topmost": False,
-        "record_only_mode": False  # 添加新设置项
+        "record_only_mode": False,  # 添加新设置项
+        "diarization": False
     }
     
     def __init__(self):

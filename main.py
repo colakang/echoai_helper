@@ -390,6 +390,27 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     )
     record_only_checkbox.pack(side="left", padx=(0, 5))  # 减少右侧padding
 
+    # Speaker labelling. Only meaningful on the far-end track, which carries
+    # everyone in the meeting; costs one voice embedding per utterance.
+    diarize_var = tk.BooleanVar(value=settings_manager.get_setting("diarization"))
+
+    def toggle_diarization():
+        enabled = diarize_var.get()
+        AudioConfig.set_diarization(enabled)
+        settings_manager.update_setting("diarization", enabled)
+
+    diarize_checkbox = ctk.CTkCheckBox(
+        controls_frame,
+        text="Speakers",
+        variable=diarize_var,
+        command=toggle_diarization,
+        width=90,
+        height=button_height,
+        checkbox_width=16,
+        checkbox_height=16,
+    )
+    diarize_checkbox.pack(side="left", padx=(0, 5))
+
     # Topmost Button
     topmost_var = tk.BooleanVar(value=settings_manager.get_setting("window_topmost"))
 
@@ -568,6 +589,7 @@ def main():
     root.attributes('-topmost', saved_topmost)  # 设置置顶状态   
     
     SystemConfig.set_record_only_mode(settings_manager.get_setting("record_only_mode"))
+    AudioConfig.set_diarization(settings_manager.get_setting("diarization"))
 
     # Apply the saved transcription profile before the first chunk arrives.
     saved_profile = profiles.by_key(settings_manager.get_setting("profile"))

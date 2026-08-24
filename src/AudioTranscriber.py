@@ -11,8 +11,22 @@ from scipy import signal
 
 from .config import AudioConfig, SystemConfig
 from .asr.hypothesis import HypothesisTracker
+from .asr.diarization import SpeakerEmbedder, SpeakerRegistry
 from .asr.segmenter import Event, SegmenterConfig, SpeechSegmenter
 from .asr.vad import VAD
+
+
+def _asr_device() -> str:
+    """Reuse whatever device the ASR is configured for."""
+    try:
+        import yaml
+        from .config import PathConfig
+        with open(f"{PathConfig.get_project_root()}/conf.yaml", "rb") as f:
+            config = yaml.safe_load(f)
+        name = config.get("ASR_MODEL", "FunASR")
+        return config.get(name, {}).get("device", "cpu")
+    except Exception:
+        return "cpu"
 
 
 def _vad_model_path() -> str:
@@ -107,6 +121,13 @@ class AudioTranscriber:
         # letting them guess from too little signal.
         self._session_language = {name: None for name in self.audio_sources}
 
+        # Speaker labelling. The registry is per track: "Speaker" carries
+        # everyone in the meeting and needs splitting, while "You" is one
+        # person by construction. The embedder is shared and loaded lazily,
+        # so nothing is paid unless diarization is switched on.
+        self._embedder = SpeakerEmbedder(device=_asr_device())
+        self._registries = {name: SpeakerRegistry() for name in self.audio_sources}
+
     def transcribe_audio_queue(self, audio_queue):
         """
         One thread per track. Audio is segmented on speech pauses rather than
@@ -186,8 +207,11 @@ class AudioTranscriber:
                 # utterance does not inherit a blank record.
                 return
 
-            print(f"Segment [{who_spoke} {segment.duration_s:.1f}s] {text}")
-            self.update_transcript(who_spoke, text, time_spoken)
+            label = self._identify_speaker(who_spoke, segment)
+            display = f"{label}: {text}" if label else text
+            print(f"Segment [{who_spoke} {segment.duration_s:.1f}s]"
+                  f"{' ' + label if label else ''} {text}")
+            self.update_transcript(who_spoke, display, time_spoken)
             self.audio_sources[who_spoke]["new_phrase"] = True
 
             # Trigger the responder here, not when the phrase started. The
@@ -196,6 +220,36 @@ class AudioTranscriber:
             if (who_spoke.lower() == "speaker"
                     and not SystemConfig.get_record_only_mode()):
                 self.transcript_changed_event.set()
+
+    def _identify_speaker(self, who_spoke, segment):
+        """
+        Which of the voices on this track just spoke, or None.
+
+        Only the far-end track is worth splitting: "You" is a single person
+        by construction, and running this on it would spend an embedding per
+        segment to rediscover that.
+        """
+        if not AudioConfig.get_diarization():
+            return None
+        if who_spoke.lower() != "speaker":
+            return None
+
+        config = self._registries[who_spoke].config
+        if segment.duration_s < config.min_duration_s:
+            # Too short for a reliable embedding, the same way it is too short
+            # for reliable language detection.
+            return None
+
+        embedding = self._embedder.embed(segment.audio)
+        if embedding is None:
+            return None
+
+        result = self._registries[who_spoke].assign(embedding)
+        if result.speaker is None:
+            return None
+        # A blended segment -- two voices with no pause between them -- is
+        # marked rather than presented as certain.
+        return result.label if result.confident else f"{result.label}?"
 
     @staticmethod
     def _is_usable(text) -> bool:
@@ -417,3 +471,5 @@ class AudioTranscriber:
             source_info["first_spoken"] = None
             self.segmenters[source_name].reset()
             self.trackers[source_name].reset()
+            self._registries[source_name].reset()
+            self._session_language[source_name] = None
