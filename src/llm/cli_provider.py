@@ -52,7 +52,10 @@ class CLIProvider(LLMProvider):
     COMMANDS = {
         # `claude -p` is the documented non-interactive mode.
         "claude": {
-            "argv": ["claude", "-p", "--disallowed-tools", ",".join(NO_TOOLS)],
+            # --strict-mcp-config skips loading the user's MCP servers,
+            # which are irrelevant here and cost 1.5s of the ~2.9s startup.
+            "argv": ["claude", "-p", "--strict-mcp-config",
+                     "--disallowed-tools", ",".join(NO_TOOLS)],
             "stdin": True,
         },
         # codex refuses to run outside a trusted directory unless told not to

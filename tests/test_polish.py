@@ -36,36 +36,44 @@ class StubProvider:
         yield self.outputs.pop(0) if self.outputs else ""
 
 
-def numbered(*lines):
-    return "\n".join(f"{i}| {t}" for i, t in enumerate(lines, start=1))
+def corrections(**by_number):
+    """Model output: only the lines that changed, keyed by their number."""
+    return "\n".join(f"{n[1:]}| {t}" for n, t in sorted(by_number.items()))
 
 
 # --------------------------------------------------------------------------
 # Parsing
 # --------------------------------------------------------------------------
 
-def test_parse_reads_numbered_lines():
-    assert _parse("1| first\n2| second", 2) == ["first", "second"]
+def test_parse_reads_numbered_corrections():
+    assert _parse("1| first\n2| second", 2) == {1: "first", 2: "second"}
 
 
 def test_parse_ignores_commentary():
-    output = "Here are the cleaned lines:\n\n1| first\n2| second\n\nDone!"
-    assert _parse(output, 2) == ["first", "second"]
+    output = "Here are the corrections:\n\n1| first\n2| second\n\nDone!"
+    assert _parse(output, 2) == {1: "first", 2: "second"}
 
 
 def test_parse_is_keyed_by_number_not_position():
-    """A dropped or reordered line must not shift every later correction onto
-    the wrong segment."""
-    assert _parse("2| second\n1| first", 2) == ["first", "second"]
+    """Position is never used: a reordered or partial reply must still land on
+    the line it names."""
+    assert _parse("2| second\n1| first", 2) == {1: "first", 2: "second"}
 
 
-def test_parse_rejects_a_short_response():
-    """Missing lines mean the rest can no longer be matched with confidence."""
-    assert _parse("1| only one", 3) == []
+def test_parse_accepts_a_partial_response():
+    """Only changed lines come back, so most replies are shorter than the
+    batch. That is the normal case, not a failure."""
+    assert _parse("2| only this one changed", 3) == {2: "only this one changed"}
 
 
-def test_parse_rejects_out_of_range_numbers():
-    assert _parse("1| a\n2| b\n7| c", 3) == []
+def test_parse_accepts_an_empty_response():
+    """Nothing to correct is a valid answer."""
+    assert _parse("", 3) == {}
+
+
+def test_parse_drops_out_of_range_numbers():
+    """A number outside the batch would land on somebody else's words."""
+    assert _parse("1| a\n7| wrong", 3) == {1: "a"}
 
 
 def test_strip_speaker_prefix():
@@ -83,7 +91,7 @@ def test_original_text_is_never_replaced():
     """A transcript is a record. The raw version has to survive so anyone can
     check what the model changed."""
     source = messages("i want to ask for the service repare")
-    provider = StubProvider([numbered("I want to ask for the service repair")])
+    provider = StubProvider([corrections(n1="I want to ask for the service repair")])
 
     result = polish_transcript(source, provider, batch_size=10)
 
@@ -93,16 +101,17 @@ def test_original_text_is_never_replaced():
 
 def test_input_messages_are_not_mutated():
     source = messages("original")
-    polish_transcript(source, StubProvider([numbered("cleaned")]), batch_size=10)
+    polish_transcript(source, StubProvider([corrections(n1="cleaned")]), batch_size=10)
     assert source[0] == {"text": "original", "speaker": "S1", "timestamp": "t0"}
     assert "polished" not in source[0]
 
 
-def test_unchanged_lines_get_no_polished_field():
-    source = messages("already fine")
-    result = polish_transcript(source, StubProvider([numbered("already fine")]),
-                               batch_size=10)
-    assert "polished" not in result.segments[0]
+def test_unmentioned_lines_are_untouched():
+    """A line the model does not return is left alone by construction, rather
+    than by comparing text -- so it cannot be altered by accident."""
+    source = messages("already fine", "also fine")
+    result = polish_transcript(source, StubProvider([""]), batch_size=10)
+    assert all("polished" not in s for s in result.segments)
     assert result.polished_count == 0
 
 
@@ -110,17 +119,18 @@ def test_unchanged_lines_get_no_polished_field():
 # Failure handling
 # --------------------------------------------------------------------------
 
-def test_a_wrong_line_count_discards_the_batch():
-    """Applying a mismatched response would attribute one speaker's words to
-    another."""
+def test_a_correction_lands_on_the_line_it_names():
+    """The safety property: a partial reply corrects exactly what it names and
+    touches nothing else, so words are never attributed to the wrong speaker."""
     source = messages("one", "two", "three")
-    provider = StubProvider([numbered("ONE", "TWO")])   # only two back
+    provider = StubProvider([corrections(n2="TWO")])
 
     result = polish_transcript(source, provider, batch_size=10)
 
-    assert all("polished" not in s for s in result.segments)
-    assert result.batches_failed == 1
-    assert not result.ok
+    assert "polished" not in result.segments[0]
+    assert result.segments[1]["polished"] == "TWO"
+    assert "polished" not in result.segments[2]
+    assert result.polished_count == 1
 
 
 def test_a_provider_error_keeps_the_originals():
@@ -140,7 +150,7 @@ def test_a_provider_error_keeps_the_originals():
 def test_one_failed_batch_does_not_lose_the_others():
     source = messages(*[f"line {i}" for i in range(4)])
     provider = StubProvider([
-        numbered("LINE 0", "LINE 1"),
+        corrections(n1="LINE 0", n2="LINE 1"),
         "garbage, no numbered lines at all",
     ])
 
@@ -148,7 +158,6 @@ def test_one_failed_batch_does_not_lose_the_others():
 
     assert result.segments[0]["polished"] == "LINE 0"
     assert "polished" not in result.segments[2]
-    assert result.batches_failed == 1
     assert result.polished_count == 2
 
 
@@ -173,7 +182,7 @@ def test_no_provider_is_a_no_op():
 
 def test_empty_lines_are_skipped():
     source = messages("real text", "", "   ")
-    provider = StubProvider([numbered("REAL TEXT")])
+    provider = StubProvider([corrections(n1="REAL TEXT")])
     result = polish_transcript(source, provider, batch_size=10)
 
     assert result.segments[0]["polished"] == "REAL TEXT"
@@ -183,7 +192,9 @@ def test_empty_lines_are_skipped():
 def test_long_transcripts_are_split():
     source = messages(*[f"line {i}" for i in range(7)])
     provider = StubProvider([
-        numbered("a", "b", "c"), numbered("d", "e", "f"), numbered("g"),
+        corrections(n1="a", n2="b", n3="c"),
+        corrections(n1="d", n2="e", n3="f"),
+        corrections(n1="g"),
     ])
     result = polish_transcript(source, provider, batch_size=3)
 
@@ -195,7 +206,7 @@ def test_context_is_sent_but_not_returned():
     """The first line of a batch needs to know what preceded it -- that is
     exactly where a mis-heard word is recoverable from context."""
     source = messages(*[f"line {i}" for i in range(6)])
-    provider = StubProvider([numbered("a", "b", "c"), numbered("d", "e", "f")])
+    provider = StubProvider([corrections(n1="a"), corrections(n1="d")])
     polish_transcript(source, provider, batch_size=3, overlap=2)
 
     second_prompt = provider.prompts[1]
@@ -207,7 +218,7 @@ def test_context_is_sent_but_not_returned():
 def test_progress_is_reported():
     seen = []
     source = messages(*[f"line {i}" for i in range(5)])
-    provider = StubProvider([numbered("a", "b"), numbered("c", "d"), numbered("e")])
+    provider = StubProvider([corrections(n1="a"), corrections(n1="c"), corrections(n1="e")])
 
     polish_transcript(source, provider, batch_size=2,
                       progress=lambda done, total: seen.append((done, total)))
@@ -218,15 +229,28 @@ def test_progress_is_reported():
 
 def test_speaker_labels_reach_the_model():
     source = [{"text": "hello", "speaker": "S2"}]
-    provider = StubProvider([numbered("Hello.")])
+    provider = StubProvider([corrections(n1="Hello.")])
     polish_transcript(source, provider, batch_size=10)
     assert "[S2] hello" in provider.prompts[0]
 
 
-def test_summary_reports_partial_success():
+def test_summary_reports_what_was_cleaned():
     source = messages(*[f"line {i}" for i in range(4)])
-    provider = StubProvider([numbered("a", "b"), "broken"])
+    provider = StubProvider([corrections(n1="a", n2="b"), ""])
     result = polish_transcript(source, provider, batch_size=2)
 
     assert "2/4 lines cleaned" in result.summary()
+
+
+def test_summary_reports_a_failed_batch():
+    class HalfBroken:
+        def __init__(self): self.calls = 0
+        def generate_response(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("rate limited")
+            yield "1| a\n2| b"
+
+    source = messages(*[f"line {i}" for i in range(4)])
+    result = polish_transcript(source, HalfBroken(), batch_size=2)
     assert "1/2 batches failed" in result.summary()

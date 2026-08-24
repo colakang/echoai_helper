@@ -52,13 +52,13 @@ Correct those, using the surrounding conversation as evidence. Specifically:
 - Never add information that is not in the transcript. If you are unsure what
   a word was, leave it alone rather than guessing at something plausible.
 
-Return every line back, numbered exactly as given, one per line, in the same
-order, in the form:
+Return ONLY the lines that need changing, numbered exactly as given, one per
+line, in the form:
 
-    12| cleaned text
+    12| corrected text
 
-Return the same number of lines you were given. No commentary, no headings,
-nothing else."""
+Do not return lines that are already fine. If nothing needs correcting,
+return nothing at all. No commentary, no headings, nothing else."""
 
 _LINE = re.compile(r"^\s*(\d+)\s*\|\s?(.*)$")
 
@@ -126,17 +126,13 @@ def polish_transcript(messages: List[dict], provider,
             result.errors.append(str(e))
             continue
 
-        if len(cleaned) != len(batch):
-            # A mismatched count means the lines can no longer be matched to
-            # their segments with confidence, and applying them anyway would
-            # attribute one speaker's words to another. Drop the batch.
-            result.batches_failed += 1
-            result.errors.append(
-                f"batch {batch_number + 1}: expected {len(batch)} lines, "
-                f"got {len(cleaned)}")
-            continue
-
-        for (index, segment), text in zip(batch, cleaned):
+        # Corrections arrive keyed by the number they were given, and only
+        # for lines that changed. A line nobody mentions is left exactly as
+        # it was -- untouched by construction rather than by comparison --
+        # which also means a truncated reply loses corrections instead of
+        # misattributing them.
+        for number, text in cleaned.items():
+            index, segment = batch[number - 1]
             if text and text != segment.get("text"):
                 segments[index]["polished"] = text
                 result.polished_count += 1
@@ -146,7 +142,7 @@ def polish_transcript(messages: List[dict], provider,
     return result
 
 
-def _polish_batch(batch, context, provider) -> List[str]:
+def _polish_batch(batch, context, provider) -> Dict[int, str]:
     prompt = [INSTRUCTIONS, ""]
 
     if context:
@@ -176,13 +172,13 @@ def _speaker(segment: dict) -> str:
     return f"[{label}] " if label else ""
 
 
-def _parse(output: str, expected: int) -> List[str]:
+def _parse(output: str, expected: int) -> Dict[int, str]:
     """
-    Pull `12| text` lines back out.
+    Pull `12| text` corrections back out, keyed by line number.
 
-    Keyed by the model's own numbering rather than by position, so a stray
-    blank line or a dropped one does not shift every subsequent correction
-    onto the wrong segment.
+    Only the model's own numbering is trusted; position is never used. A line
+    number outside the batch is dropped rather than clamped -- it would land
+    on somebody else's words.
     """
     found: Dict[int, str] = {}
     for raw in (output or "").splitlines():
@@ -192,10 +188,7 @@ def _parse(output: str, expected: int) -> List[str]:
         number = int(match.group(1))
         if 1 <= number <= expected:
             found[number] = _strip_speaker(match.group(2).strip())
-
-    if len(found) != expected:
-        return []
-    return [found[i] for i in range(1, expected + 1)]
+    return found
 
 
 def _strip_speaker(text: str) -> str:

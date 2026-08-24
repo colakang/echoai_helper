@@ -60,6 +60,21 @@ def update_response_UI(responder, textbox, freeze_state, transcript_ui):
                   transcript_ui)
 
     
+def _save_markdown(filepath, conversation_data, include_original):
+    """Render and write the human-readable export."""
+    try:
+        from src.export_markdown import render
+        text = render(conversation_data, include_original=include_original)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(text)
+        return True
+    except Exception as e:
+        print(f"Markdown export failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def _polish_before_export(conversation_data):
     """
     Clean the transcript in place and describe what happened.
@@ -250,12 +265,14 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
                 return
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
+
             filepath = filedialog.asksaveasfilename(
-                defaultextension=".json",
-                initialfile=f"conversation_export_{timestamp}.json",
-                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-                title="Export Conversation Data"
+                defaultextension=".md",
+                initialfile=f"conversation_{timestamp}.md",
+                filetypes=[("Markdown (for reading)", "*.md"),
+                           ("JSON (full record)", "*.json"),
+                           ("All files", "*.*")],
+                title="Export Conversation"
             )
             
             if filepath:
@@ -269,11 +286,25 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
                         "This can take a minute on a long meeting."):
                     polish_note = _polish_before_export(conversation_data)
 
-                success = response_manager.save_structured_conversation(
-                    filepath, 
-                    conversation_data
-                )
-                
+                if filepath.lower().endswith(".md"):
+                    # Markdown is read, so it carries the cleaned text only.
+                    # Offer the raw lines for when the transcript is evidence
+                    # rather than notes.
+                    include_original = bool(polish_note) and messagebox.askyesno(
+                        "Include the original wording?",
+                        "Show what the recogniser originally heard beneath each "
+                        "line that was corrected?\n\n"
+                        "Useful when the transcript needs to be checked. Leave "
+                        "this off for ordinary notes -- it roughly doubles the "
+                        "length.")
+                    success = _save_markdown(filepath, conversation_data,
+                                             include_original)
+                else:
+                    success = response_manager.save_structured_conversation(
+                        filepath,
+                        conversation_data
+                    )
+
                 if success:
                     total_messages = len(conversation_data["conversation"]["messages"])
                     messages_with_responses = sum(
