@@ -334,6 +334,21 @@ class ResponseManager:
         #print(f"Get Response ID: {response_id}")
         return self._responses.get(response_id)
     
+    def recent_exchanges(self, limit: int = 6) -> List[tuple]:
+        """
+        The last `limit` completed (question, answer) pairs, oldest first.
+
+        Feeds the conversation history the responder sends as real message
+        turns. Only completed exchanges: a half-streamed answer would show the
+        model its own truncated output as settled fact.
+        """
+        with self._lock:
+            completed = [r for r in self._responses.values()
+                         if r.is_complete and r.question_text]
+            completed.sort(key=lambda r: r.question_time)
+            return [(r.question_text, r.response_text or "")
+                    for r in completed[-limit:]]
+
     def get_latest_response(self) -> Optional[Response]:
         """获取最新的response"""
         print(f"Get latest response:\n\n")

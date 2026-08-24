@@ -5,7 +5,7 @@ import re
 import time
 import traceback
 
-from .prompts import create_prompt
+from .prompts import build_messages
 from .config import SystemConfig, EnvConfig
 from .llm import create_llm_provider
 import yaml
@@ -81,6 +81,14 @@ class GPTResponder:
                     'api_key': EnvConfig.get_openai_key(),
                     'model': llm_config.get('openai', {}).get('model', 'gpt-4o-mini')
                 }
+            elif provider_type == 'cli':
+                cli_config = llm_config.get('cli', {})
+                provider_config = {
+                    'command': cli_config.get('command', 'claude'),
+                    'model': cli_config.get('model'),
+                    'timeout': cli_config.get('timeout', 90),
+                    'extra_args': cli_config.get('extra_args'),
+                }
             elif provider_type == 'litellm':
                 # LiteLLM configuration (supports Gemini, Ollama, Claude, etc.)
                 litellm_config = llm_config.get('litellm', {})
@@ -110,7 +118,7 @@ class GPTResponder:
             traceback.print_exc()
             return False
 
-    def _generate_response_from_transcript(self, lastContent, latest_response_text="", latest_response_q_text="", current_response_id=None):
+    def _generate_response_from_transcript(self, lastContent, latest_response_text="", latest_response_q_text="", current_response_id=None, history=None):
         """
         Generate streaming response from transcript
 
@@ -126,21 +134,17 @@ class GPTResponder:
         if not _worth_answering(lastContent):
             return
 
-        conversation_history = []
-        recent_speakers = ["Speaker: [{}]\n\n".format(latest_response_q_text)]
-        conversation_history.extend(recent_speakers)
-
-        # Combine records into string
-        recent_transcript = "".join(conversation_history)
-        
         try:
-            content = create_prompt(recent_speakers, lastContent, latest_response_text)
-
-            # Use LLM Provider to generate streaming response
-            messages = [
-                {"role": "system", "content": SystemConfig.get_system_role()},
-                {"role": "user", "content": content},
-            ]
+            # Real dialogue turns, not one flattened blob. The previous shape
+            # restated the rules on every call and carried a single past
+            # question, so the model could not see what it had already said --
+            # in a live run it answered "How may I assist you today?" four
+            # times to four different utterances.
+            messages = build_messages(
+                SystemConfig.get_system_role(),
+                history if history is not None else [],
+                lastContent,
+            )
 
             accumulated_response = ""
             emitted = ""
@@ -262,10 +266,14 @@ class GPTResponder:
         self.response = "Thinking..."
         self.response_manager.update_response(current_response_id, self.response)
 
+        # Everything settled so far, so the model can tell a new question
+        # from a rephrasing of one it has already answered.
+        history = self.response_manager.recent_exchanges()
+
         answered = False
         for response_text in self._generate_response_from_transcript(
                 question_text, previous_answer, previous_question,
-                current_response_id):
+                current_response_id, history=history):
             if response_text.strip():
                 self.response = response_text
                 answered = True

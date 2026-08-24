@@ -32,8 +32,26 @@ FunASR:
 # ============================================================================
 
 LLM:
-  # Choose provider: "openai" or "litellm"
+  # Choose provider: "openai", "litellm" or "cli"
   provider: "openai"
+
+  # ----------------------------------------------------------------------------
+  # CLI Configuration -- answer through a locally installed agent CLI
+  # ----------------------------------------------------------------------------
+  # Bills against a subscription you may already pay for rather than per
+  # token, so a long meeting costs nothing extra. The trade is latency: each
+  # answer spawns a process, measured at 3.8-5.5s for `claude -p` against
+  # roughly 1s for the same question over the API.
+  #
+  # Suited to the meeting-notes polish pass, where nobody is waiting. Not to
+  # live interview prompting, where 4s plus transcription latency lands after
+  # the moment has passed.
+  #
+  # The CLI must already be installed and logged in; there is no key to pass.
+  cli:
+    command: "claude"    # claude | codex | gemini
+    # model: "opus"      # optional, passed as --model
+    timeout: 90
 
   # ----------------------------------------------------------------------------
   # OpenAI Configuration
