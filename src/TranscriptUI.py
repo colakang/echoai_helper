@@ -34,10 +34,12 @@ class TranscriptUI:
         # 配置文本框
         self._configure_textbox()
         
-        # 注册响应更新回调
-        if hasattr(response_manager, 'register_update_callback'):
-            response_manager.register_update_callback(self._on_response_update)
-        
+        # No callback registration here. There used to be a
+        # hasattr(response_manager, 'register_update_callback') guard, but
+        # ResponseManager has never had that method, so the branch was always
+        # false and _on_response_update was dead. Response text reaches the UI
+        # through the 300ms poll in main.update_response_UI instead.
+
         if self.debug_mode:
             print("TranscriptUI initialized")
     def _initialize_default_lines(self) -> None:
@@ -357,71 +359,6 @@ class TranscriptUI:
             print(f"Error in _add_record_tags: {str(e)}")
             traceback.print_exc()
 
-    def _add_record_tags_(self, position: str, record: Dict) -> None:
-        """
-        为记录添加tag和交互效果
-        
-        Args:
-            position: 插入位置
-            record: 记录数据
-        """
-        try:
-            # 获取插入的文本行的结束位置
-            line_end = self.text_widget.index(f"{position} lineend")
-            tag_name = f"response_{record['response_id']}"
-            
-            # 添加tag到整行文本
-            self.text_widget.tag_add(tag_name, position, f"{line_end}+1c")
-            
-            # 设置tag样式
-            hover_bg = '#2f3746' if record['type'] == 'Speaker' else '#1f2736'
-            self.text_widget.tag_configure(tag_name, background='')
-            
-            # 添加鼠标悬停效果
-            def on_enter(e, tag=tag_name, bg=hover_bg):
-                try:
-                    self.text_widget.tag_configure(tag, background=bg)
-                except Exception as e:
-                    print(f"Error in on_enter: {e}")
-                    
-            def on_leave(e, tag=tag_name):
-                try:
-                    self.text_widget.tag_configure(tag, background='')
-                except Exception as e:
-                    print(f"Error in on_leave: {e}")
-            
-            # 绑定鼠标事件
-            self.text_widget.tag_bind(tag_name, '<Enter>', on_enter)
-            self.text_widget.tag_bind(tag_name, '<Leave>', on_leave)
-            
-            # 为You类型设置特殊颜色
-            if record['type'] == 'You':
-                self.text_widget.tag_configure(tag_name, foreground='#A0A0A0')
-            
-            if self.debug_mode:
-                print(f"Added tag {tag_name} to text at position {position}")
-                
-        except Exception as e:
-            print(f"Error in _add_record_tags: {str(e)}")
-            traceback.print_exc()
-
-    def _update_response_text_(self, response_text: str) -> None:
-        """更新响应文本框内容"""
-        try:
-            if not self.response_textbox:
-                print("Warning: response_textbox is not initialized.")
-                return
-
-            current_text = self.response_textbox.get("1.0", "end-1c")
-            if response_text != current_text:  # 只在内容变化时更新
-                self.response_textbox.configure(state="normal")
-                self.response_textbox.delete("1.0", "end")
-                self.response_textbox.insert("1.0", response_text)
-                self.response_textbox.configure(state="normal")
-        except Exception as e:
-            print(f"Error updating response text: {e}")
-            traceback.print_exc()
-
     def _update_response_text(self, response_text: str, question_text: str = None) -> None:
         """
         更新响应文本框内容，包括问题和答案
@@ -478,53 +415,6 @@ class TranscriptUI:
         except Exception as e:
             print(f"Error in clear: {str(e)}")
             traceback.print_exc()
-
-    def _on_response_update(self, response_id: str, response_text: str, is_complete: bool) -> None:
-        """
-        响应更新回调函数
-        
-        Args:
-            response_id: 响应ID
-            response_text: 更新的响应文本
-            is_complete: 响应是否完成
-        """
-        try:
-            # 强制更新最新的响应，即使在锁定状态下
-            if self.is_response_locked and response_id != self.selected_response_id:
-                return
-
-            if not self.response_textbox:
-                print("Warning: response_textbox is not initialized.")
-                return
-            # 获取关联的response对象以获取问题文本
-            response = self.response_manager.get_response(response_id)
-            question_text = response.question_text if response else None
-            self.response_textbox.configure(state="normal")
-            
-            if not is_complete:
-                # 如果响应尚未完成，追加更新文本而不是替换整个内容
-                current_text = self.response_textbox.get("1.0", "end-1c")
-                updated_text = current_text + response_text
-                self.response_textbox.delete("1.0", "end")
-                self.response_textbox.insert("1.0", updated_text)
-            else:
-                # 如果响应完成，则替换整个内容
-                display_text = self._format_response_display(question_text, response_text)
-                self.response_textbox.delete("1.0", "end")
-                self.response_textbox.insert("1.0", display_text)
-                #self.response_textbox.insert("1.0", response_text)
-            
-            self.response_textbox.configure(state="normal")  # 保持可选择状态
-
-            # 更新最新的响应ID
-            self.last_response_id = response_id
-            
-            if self.debug_mode:
-                print(f"Response updated: {response_id}, complete: {is_complete}")
-        except Exception as e:
-            print(f"Error in _on_response_update: {e}")
-            traceback.print_exc()
-
 
     def update_latest_response(self, response_id: str, response_text: str, question_text: str = None) -> None:
         """强制更新最新的响应文本，无论锁定状态"""

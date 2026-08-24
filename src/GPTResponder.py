@@ -1,13 +1,44 @@
 ##src/GPTResponder.py
 
 import threading
-from .prompts import create_prompt, INITIAL_RESPONSE
+import re
 import time
-import sys
+import traceback
+
+from .prompts import create_prompt
 from .config import SystemConfig, EnvConfig
 from .llm import create_llm_provider
 import yaml
 from pathlib import Path
+
+# The answer is requested inside square brackets. During streaming the
+# closing bracket has usually not arrived yet, so take everything after the
+# first opening one.
+_OPEN = re.compile(r"\[")
+
+
+def _extract(text: str) -> str:
+    """The answer so far, with the bracket wrapper removed."""
+    match = _OPEN.search(text)
+    if not match:
+        return text.strip()
+    body = text[match.end():]
+    closing = body.find("]")
+    return (body[:closing] if closing >= 0 else body).strip()
+
+
+# Below this an utterance carries no question worth spending a model call on.
+MIN_QUESTION_CHARS = 4
+
+
+def _worth_answering(text: str) -> bool:
+    return bool(text) and len(text.strip()) >= MIN_QUESTION_CHARS
+
+
+def _is_no_response(text: str) -> bool:
+    """The model's way of saying the speaker added nothing new."""
+    return text.strip().strip(".").casefold() in ("none", "")
+
 
 class GPTResponder:
     def __init__(self, response_manager):
@@ -92,9 +123,7 @@ class GPTResponder:
         Yields:
             str: Generated response chunks
         """
-        # Filter short content
-        if lastContent.strip() == "" or len(lastContent.strip()) < 4:
-            print("Skipping due to too short content (length: {})".format(len(lastContent.strip())))
+        if not _worth_answering(lastContent):
             return
 
         conversation_history = []
@@ -114,128 +143,143 @@ class GPTResponder:
             ]
 
             accumulated_response = ""
+            emitted = ""
             for chunk_content in self.llm_provider.generate_response(
                 messages=messages,
                 temperature=0.6,
                 stream=True
             ):
-                if chunk_content:
-                    accumulated_response += chunk_content
+                if not chunk_content:
+                    continue
+                accumulated_response += chunk_content
 
-                    # Try to parse content in brackets
-                    try:
-                        if '[' in accumulated_response and ']' in accumulated_response:
-                            response_text = accumulated_response.split("[")[1].split("]")[0]
-                        else:
-                            response_text = accumulated_response
+                # The prompt asks for the answer wrapped in [ ]. Extract from
+                # the tail only: the old code re-split the whole accumulated
+                # string on every chunk, which is quadratic in the length of
+                # the answer, and it showed the raw text -- opening bracket
+                # included -- for as long as the closing one had not arrived.
+                visible = _extract(accumulated_response)
+                if visible == emitted:
+                    continue
+                emitted = visible
 
-                        # Update response
-                        if current_response_id:
-                            self.response = response_text
-                            self.response_manager.update_response(
-                                current_response_id,
-                                response_text,
-                                is_complete=False
-                            )
-
-                        yield response_text
-
-                    except Exception as e:
-                        print("Error parsing chunk: {}".format(str(e)))
-                        yield chunk_content
-
-            # Mark as complete
-            if current_response_id:
-                try:
-                    # Try to extract content from brackets, fallback to full response
-                    if '[' in accumulated_response and ']' in accumulated_response:
-                        final_response = accumulated_response.split("[")[1].split("]")[0]
-                    else:
-                        print("No brackets found in response, using full response")
-                        final_response = accumulated_response
-
+                if current_response_id:
+                    self.response = visible
                     self.response_manager.update_response(
-                        current_response_id,
-                        final_response,
-                        is_complete=True
-                    )
-                except Exception as e:
-                    print("Error processing final response: {}".format(str(e)))
-                    # Fallback to full response
-                    self.response_manager.update_response(
-                        current_response_id,
-                        accumulated_response,
-                        is_complete=True
-                    )
+                        current_response_id, visible, is_complete=False)
+                yield visible
 
-        except Exception as e:
-            print("Error in generate_response: {}".format(str(e)))
-            error_message = str(e)
+            final = _extract(accumulated_response)
+
+            # The prompt tells the model to answer 'None' when the speaker has
+            # said nothing new worth responding to. Nothing acted on that, so
+            # the word "None" was displayed to the user as if it were the
+            # answer. Treat it as what it means -- no new response -- and
+            # leave the previous one on screen.
+            if _is_no_response(final):
+                print("Responder: model declined to answer (no new content)")
+                if current_response_id:
+                    self.response_manager.update_response(
+                        current_response_id, "", is_complete=True)
+                self.response = latest_response_text or ""
+                return
+
             if current_response_id:
                 self.response_manager.update_response(
-                    current_response_id,
-                    error_message,
-                    is_complete=True
-                )
-            yield error_message
+                    current_response_id, final, is_complete=True)
+
+        except Exception as e:
+            # An exception is not an answer. It used to be yielded and stored
+            # as the completed response, so a rate limit or a network blip
+            # appeared in the UI in place of the assistant's reply and was
+            # then fed back as context to the next turn.
+            print("Error in generate_response: {}".format(e))
+            traceback.print_exc()
+            self.response = "[error] {}".format(e)
+            if current_response_id:
+                self.response_manager.update_response(
+                    current_response_id, "", is_complete=True)
+            return
 
     def respond_to_transcriber(self, transcriber):
         """
-        Continuously listen and respond to transcriber output
+        Answer each completed utterance from the far end.
 
-        Args:
-            transcriber: Transcriber instance
+        Woken by transcript_changed_event, which the transcriber now sets when
+        a *segment* ends rather than when a phrase begins -- so the question
+        here is a finished sentence rather than its first fragment.
         """
         while True:
             try:
-                # Wait for transcript_changed_event
-                if transcriber.transcript_changed_event.wait(0.1):
-                    transcriber.transcript_changed_event.clear()
+                if not transcriber.transcript_changed_event.wait(0.1):
+                    continue
+                transcriber.transcript_changed_event.clear()
 
-                    if transcriber.structured_transcript["speaker"]:
-                        latest_record = transcriber.structured_transcript["speaker"][0]
-                        current_response_id = latest_record[2]
+                if not transcriber.structured_transcript["speaker"]:
+                    continue
 
-                        if (current_response_id and
-                            current_response_id != self._last_processed_id and
-                            not self._processing):
+                latest_record = transcriber.structured_transcript["speaker"][0]
+                current_response_id = latest_record[2]
+                if not current_response_id:
+                    continue
 
-                            with self._lock:
-                                self._processing = True
+                # Claim the work under the lock. The old code tested
+                # _processing outside it and set it inside, which only
+                # happened to be safe because there is exactly one consumer.
+                with self._lock:
+                    if (self._processing
+                            or current_response_id == self._last_processed_id):
+                        continue
+                    self._processing = True
 
-                            try:
-                                question_text = latest_record[0]
-                                self.response = "Thinking..."
-                                self.response_manager.update_response(current_response_id, self.response)
-
-                                latest_response = self.response_manager.get_response(self._last_processed_id)
-                                latest_response_text = ""
-                                latest_response_q_text = ""
-                                if latest_response and latest_response.is_complete:
-                                    latest_response_text = latest_response.response_text
-                                    latest_response_q_text = latest_response.question_text
-
-                                response_text = ''
-                                # Use generator to process streaming response
-                                for response_text in self._generate_response_from_transcript(
-                                    question_text,
-                                    latest_response_text,
-                                    latest_response_q_text,
-                                    current_response_id
-                                ):
-                                    if response_text.strip():
-                                        self.response = response_text
-
-                                print("Generated response: {}".format(response_text))
-                                self._last_processed_id = current_response_id
-
-                            finally:
-                                with self._lock:
-                                    self._processing = False
+                try:
+                    self._answer(latest_record[0], current_response_id)
+                finally:
+                    with self._lock:
+                        self._last_processed_id = current_response_id
+                        self._processing = False
 
             except Exception as e:
-                print("Error in respond_to_transcriber: {}".format(str(e)))
+                print("Error in respond_to_transcriber: {}".format(e))
+                traceback.print_exc()
                 time.sleep(0.1)
 
+    def _answer(self, question_text, current_response_id):
+        previous = self.response_manager.get_response(self._last_processed_id)
+        previous_answer = ""
+        previous_question = ""
+        if previous and previous.is_complete:
+            previous_answer = previous.response_text or ""
+            previous_question = previous.question_text or ""
+
+        # Only show "Thinking..." once the question has cleared the length
+        # filter. Setting it unconditionally left it on screen forever
+        # whenever the generator returned early on a too-short utterance.
+        if not _worth_answering(question_text):
+            print("Skipping: too short ({} chars)".format(len(question_text.strip())))
+            return
+
+        self.response = "Thinking..."
+        self.response_manager.update_response(current_response_id, self.response)
+
+        answered = False
+        for response_text in self._generate_response_from_transcript(
+                question_text, previous_answer, previous_question,
+                current_response_id):
+            if response_text.strip():
+                self.response = response_text
+                answered = True
+
+        if answered:
+            print("Generated response: {}".format(self.response))
+        elif self.response == "Thinking...":
+            # Nothing came back at all. Leave the previous answer up rather
+            # than a spinner that will never resolve.
+            self.response = previous_answer
+
     def update_response_interval(self, interval):
-        self._response_update_interval = interval
+        """No-op, kept for callers that still set it.
+
+        The value was stored and never read; the UI control that drove it has
+        been removed. Response cadence is set by the segmenter's pauses.
+        """
