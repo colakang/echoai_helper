@@ -28,6 +28,23 @@ class FakeSource:
         self.channels = channels
 
 
+from src.asr.fun_asr import AsrResult          # noqa: E402
+from src.AudioTranscriber import LANGUAGE_TRUST_S  # noqa: E402
+
+
+class ScriptedModel:
+    """Returns preset results and records the language it was asked for."""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    def get_transcription_np(self, audio, language=None):
+        self.calls.append(language)
+        return self.results.pop(0) if self.results else AsrResult("", None)
+
+
+
 def make_transcriber(mic=None, speaker=None):
     """An AudioTranscriber with no model attached — none of these tests infer."""
     return AudioTranscriber(mic, speaker, model=None,
@@ -107,7 +124,7 @@ def test_buffer_stays_bounded_when_asr_returns_nothing(monkeypatch):
     t = make_transcriber(speaker=FakeSource())
     cap = t.segmenters["Speaker"].config.max_segment_s
 
-    t.audio_model = type("Silent", (), {"get_transcription_np": lambda self, a: ""})()
+    t.audio_model = ScriptedModel([])   # always returns AsrResult("", None)
     monkeypatch.setattr(t.segmenters["Speaker"].vad, "process_chunk", lambda chunk: 0.9)
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -179,3 +196,89 @@ def test_export_of_empty_transcript_is_empty_not_crashing():
     rm = ResponseManager()
     out = rm.export_structured_conversation({"combined": []})
     assert out["conversation"]["messages"] == []
+
+
+# --------------------------------------------------------------------------
+# Language stickiness
+# --------------------------------------------------------------------------
+#
+# SenseVoice detects the language per utterance but needs enough audio to do
+# it. On a real Cantonese support call, segments under ~2s came back as
+# Japanese ('ですてま。', 'え。'); a 1.7s segment in an English recording came
+# back as Chinese. Raising min_speech_ms reduced but did not remove this, so
+# short audio is pinned to the language its longer neighbours established.
+
+def transcriber_with(results):
+    t = make_transcriber(speaker=FakeSource())
+    t.audio_model = ScriptedModel(results)
+    return t
+
+
+def audio_of(seconds):
+    return np.zeros(int(seconds * 16000), dtype=np.float32)
+
+
+def test_long_audio_is_trusted_and_remembered():
+    t = transcriber_with([AsrResult("各位早晨", "yue")])
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "Speaker")
+
+    assert t.audio_model.calls == [None], "long audio must use auto-detect"
+    assert t._session_language["Speaker"] == "yue"
+
+
+def test_short_audio_is_pinned_to_the_remembered_language():
+    t = transcriber_with([AsrResult("各位早晨", "yue"), AsrResult("係", "yue")])
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "Speaker")
+    t._transcribe_audio(audio_of(0.8), "Speaker")
+
+    assert t.audio_model.calls == [None, "yue"], (
+        "short audio should be pinned, not left to guess"
+    )
+
+
+def test_short_audio_does_not_overwrite_the_remembered_language():
+    """The misdetection this exists to prevent: a sub-second burst coming
+    back as Japanese must not redirect the whole session."""
+    t = transcriber_with([AsrResult("各位早晨", "yue"), AsrResult("ですてま。", "ja")])
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "Speaker")
+    t._transcribe_audio(audio_of(0.7), "Speaker")
+
+    assert t._session_language["Speaker"] == "yue"
+
+
+def test_first_short_utterance_still_uses_auto_detect():
+    """With nothing remembered yet there is nothing to pin to."""
+    t = transcriber_with([AsrResult("hello", "en")])
+    t._transcribe_audio(audio_of(0.5), "Speaker")
+    assert t.audio_model.calls == [None]
+
+
+def test_a_genuine_language_switch_is_followed():
+    """Stickiness must not become a lock: a long utterance in another
+    language is evidence, not noise."""
+    t = transcriber_with([AsrResult("各位早晨", "yue"), AsrResult("good morning", "en")])
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "Speaker")
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "Speaker")
+
+    assert t._session_language["Speaker"] == "en"
+
+
+def test_nospeech_does_not_become_the_session_language():
+    t = transcriber_with([AsrResult("各位早晨", "yue"), AsrResult("", "nospeech")])
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "Speaker")
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "Speaker")
+
+    assert t._session_language["Speaker"] == "yue"
+
+
+def test_tracks_keep_separate_languages():
+    """A Cantonese speaker and an English one on the two tracks must not
+    contaminate each other."""
+    t = make_transcriber(mic=FakeSource(16000, 1), speaker=FakeSource())
+    t.audio_model = ScriptedModel([AsrResult("各位早晨", "yue"),
+                                   AsrResult("good morning", "en")])
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "Speaker")
+    t._transcribe_audio(audio_of(LANGUAGE_TRUST_S + 1), "You")
+
+    assert t._session_language["Speaker"] == "yue"
+    assert t._session_language["You"] == "en"

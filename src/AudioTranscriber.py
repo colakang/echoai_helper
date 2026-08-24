@@ -23,6 +23,10 @@ def _vad_model_path() -> str:
 
 # Segmentation is now driven by SegmenterConfig; these survive only because
 # main.py's UI still exposes a "Phrase Timeout" control.
+# Below this, SenseVoice's language detection is not reliable enough to
+# trust: measured misdetections at 0.7-1.7s, none above ~2s.
+LANGUAGE_TRUST_S = 2.0
+
 PHRASE_TIMEOUT = 5.2
 MAX_PHRASE_TIMEOUT = 30.2
 MAX_PHRASES = 9999
@@ -92,6 +96,17 @@ class AudioTranscriber:
         }
         self.trackers = {name: HypothesisTracker() for name in self.audio_sources}
 
+        # Language stickiness. SenseVoice detects the language per utterance,
+        # but needs enough audio to do it: on a real Cantonese call, segments
+        # under ~2s came back as Japanese ('ですてま。', 'え。'). Raising
+        # min_speech_ms helped but did not close it -- a 1.7s segment in an
+        # English recording still came back as Chinese.
+        #
+        # So: trust detection only on segments long enough to be reliable,
+        # remember what it said, and pin shorter ones to that instead of
+        # letting them guess from too little signal.
+        self._session_language = {name: None for name in self.audio_sources}
+
     def transcribe_audio_queue(self, audio_queue):
         """
         One thread per track. Audio is segmented on speech pauses rather than
@@ -142,7 +157,7 @@ class AudioTranscriber:
             return
 
         with self.model_lock:
-            text = self._transcribe_audio(audio)
+            text = self._transcribe_audio(audio, who_spoke)
         if not self._is_usable(text):
             return
 
@@ -162,7 +177,7 @@ class AudioTranscriber:
         complete -- which is what the responder waits for.
         """
         with self.model_lock:
-            text = self._transcribe_audio(segment.audio)
+            text = self._transcribe_audio(segment.audio, who_spoke)
 
         with self.source_locks[who_spoke]:
             self.trackers[who_spoke].reset()
@@ -198,18 +213,31 @@ class AudioTranscriber:
             with self.source_locks[name]:
                 segmenter.config = config
 
-    def _transcribe_audio(self, audio_np):
+    def _transcribe_audio(self, audio_np, who_spoke=None):
         """
-        Modularized transcription method for future streaming compatibility.
-        In streaming mode, this will handle chunk-based processing.
+        Transcribe, applying language stickiness.
+
+        Short audio is pinned to the language established by this track's
+        longer utterances; long audio is trusted and updates that memory.
         """
         if self.streaming_mode:
-            # Future: Streaming implementation
-            # return self._transcribe_streaming(audio_np)
             raise NotImplementedError("Streaming mode not yet implemented")
-        else:
-            # Current: Accumulate mode
-            return self.audio_model.get_transcription_np(audio_np)
+
+        duration = len(audio_np) / 16000.0
+        remembered = self._session_language.get(who_spoke)
+        trustworthy = duration >= LANGUAGE_TRUST_S
+
+        override = None if trustworthy else remembered
+        result = self.audio_model.get_transcription_np(audio_np, language=override)
+
+        detected = getattr(result, "language", None)
+        if trustworthy and detected and detected != "nospeech":
+            if who_spoke in self._session_language and detected != remembered:
+                print(f"[INFO] {who_spoke}: language now {detected!r}"
+                      + (f" (was {remembered!r})" if remembered else ""))
+                self._session_language[who_spoke] = detected
+
+        return getattr(result, "text", result)
 
     def convert_bytes_to_numpy(self, audio_bytes, who_spoke):
         """

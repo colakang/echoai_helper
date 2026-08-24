@@ -173,7 +173,7 @@ def main() -> int:
             segments = results.get(ms, [])
             print(f"\n--- min_silence={ms}ms, {len(segments)} segments ---")
             for index, segment in enumerate(segments[:8]):
-                text = model.get_transcription_np(segment.audio)
+                text = model.get_transcription_np(segment.audio).text
                 print(f"  [{index}] {segment.duration_s:4.1f}s  {text!r}")
 
     return 0

@@ -128,7 +128,7 @@ def record_and_transcribe(recorder, seconds: float) -> None:
     print(f"  model ready in {time.time() - t0:.1f}s")
 
     t0 = time.time()
-    text = model.get_transcription_np(audio_np)
+    text = model.get_transcription_np(audio_np).text
     elapsed = time.time() - t0
     rtf = elapsed / captured_s if captured_s else float("nan")
 
@@ -263,7 +263,7 @@ def _transcribe(raw: bytes, recorder, captured_s: float) -> None:
     print(f"  model ready in {time.time() - t0:.1f}s")
 
     t0 = time.time()
-    text = model.get_transcription_np(audio_np)
+    text = model.get_transcription_np(audio_np).text
     elapsed = time.time() - t0
     rtf = elapsed / captured_s if captured_s else float("nan")
 

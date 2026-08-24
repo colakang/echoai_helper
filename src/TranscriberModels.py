@@ -68,14 +68,20 @@ class FunASRTranscriber:
             return ''
         return result
 
-    def get_transcription_np(self, audio_data):
-        """Directly transcribe numpy array audio data without temporary file"""
+    def get_transcription_np(self, audio_data, language=None):
+        """
+        Transcribe a numpy array directly, no temp file.
+
+        Returns an AsrResult (text, language). `language` pins this one call,
+        letting the caller override automatic detection for audio too short
+        for it to be reliable.
+        """
+        from src.asr.fun_asr import AsrResult
         try:
-            result = self.audio_model.transcribe_np(audio_data)
+            return self.audio_model.transcribe_np(audio_data, language=language)
         except Exception as e:
             print(e)
-            return ''
-        return result
+            return AsrResult("", None)
 
 
 class WhisperTranscriber:
