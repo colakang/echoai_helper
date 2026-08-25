@@ -101,9 +101,11 @@ class AudioTranscriber:
         #                Its result is authoritative and replaces the live text.
         #
         # The slow lane is not merely a bigger batch: cutting at a pause
-        # rather than at a fixed timeout is most of why it is better. On a
-        # fixed cut lands mid-sentence and hands the model half a clause;
-        # a pause-aligned one gives it the whole utterance.
+        # rather than at a fixed timeout is most of why it is better. A fixed
+        # cut lands mid-sentence and hands the model half a clause with no way
+        # to tell what it was; a pause-aligned one gives it the whole
+        # utterance. On real recordings the difference shows up as garbled
+        # fragments becoming complete, correctly punctuated sentences.
         self.segmenters = {
             name: SpeechSegmenter(VAD(_vad_model_path()), SegmenterConfig())
             for name in self.audio_sources

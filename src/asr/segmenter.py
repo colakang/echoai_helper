@@ -167,8 +167,8 @@ class SpeechSegmenter:
         Accumulate every window. VAD decides *where to cut*, never *what to
         keep* -- an earlier design dropped anything it judged non-speech and
         lost 22-28% of three real recordings, including whole audible
-        sentences. For meeting notes, losing audio
-        is far worse than a ragged boundary.
+        sentences that never reached the transcript at all. For meeting notes,
+        losing audio is far worse than a ragged boundary.
         """
         events: List[tuple] = []
         probability = float(self.vad.process_chunk(window))
