@@ -31,7 +31,31 @@ uv pip install --python .venv/bin/python -r requirements-macos.txt
 Use `requirements-macos.txt`, not `requirements.txt` — the latter pins
 `PyAudioWPatch` and a CUDA 11.7 wheel index, neither of which exists here.
 
-## 2. Virtual audio device (BlackHole)
+## 2. Automatic setup
+
+Everything below can be done in one command:
+
+```bash
+.venv/bin/python scripts/setup_audio.py
+```
+
+It installs BlackHole if it is missing, builds the Multi-Output device, and
+selects it. macOS asks for a password only if the driver still has to be
+installed -- BlackHole is a system audio driver, so that prompt cannot be
+avoided. Nothing else needs a privilege, and Audio MIDI Setup is not involved.
+
+```bash
+scripts/setup_audio.py --status    # report, change nothing
+scripts/setup_audio.py --restore   # point audio back at your speakers
+```
+
+Worth running `--restore` when the meeting is over: a machine left pointed at
+a Multi-Output is a confusing thing to walk back to, not least because the
+volume keys do not work on one.
+
+The rest of this section describes doing it by hand.
+
+## 2b. Virtual audio device (BlackHole)
 
 Needed to capture the far end of a meeting. Installing an audio driver
 requires an admin password:
