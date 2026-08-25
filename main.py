@@ -60,6 +60,40 @@ def update_response_UI(responder, textbox, freeze_state, transcript_ui):
                   transcript_ui)
 
     
+def _ask_polish_backend():
+    """
+    Ask whether to clean the transcript, and on what.
+
+    The two backends differ in ways the user is the only one who can weigh:
+    an API key is metered but fast, a subscription CLI is already paid for but
+    roughly three times slower and subject to its own rate limits. Measured on
+    an hour-long meeting: about 3 minutes against about 9.
+    """
+    if not messagebox.askyesno(
+            "Clean up transcript?",
+            "Run the transcript through a language model to fix "
+            "speech-recognition errors before saving?\n\n"
+            "The original wording of every line is kept either way; "
+            "corrections are stored alongside it."):
+        return None
+
+    from src.llm.cli_provider import CLIProvider
+    cli_available = CLIProvider(command="claude").validate_config()
+
+    if not cli_available:
+        return "config"
+
+    use_cli = messagebox.askyesno(
+        "Which model?",
+        "Use the Claude CLI on your existing subscription?\n\n"
+        "Yes  —  Claude CLI. No per-token cost, but slower: roughly "
+        "9 minutes for an hour-long meeting, and subject to your "
+        "subscription's rate limits.\n\n"
+        "No  —  the API configured in conf.yaml. Around 3 minutes for the "
+        "same meeting, billed per token.")
+    return "cli" if use_cli else "config"
+
+
 def _save_markdown(filepath, conversation_data, include_original):
     """Render and write the human-readable export."""
     try:
@@ -75,7 +109,7 @@ def _save_markdown(filepath, conversation_data, include_original):
         return False
 
 
-def _polish_before_export(conversation_data):
+def _polish_before_export(conversation_data, backend="config"):
     """
     Clean the transcript in place and describe what happened.
 
@@ -96,7 +130,10 @@ def _polish_before_export(conversation_data):
         with open(f"{PathConfig.get_project_root()}/conf.yaml", "rb") as f:
             llm_config = (yaml.safe_load(f) or {}).get("LLM", {})
 
-        provider_type = llm_config.get("provider", "openai").lower()
+        # "cli" overrides conf.yaml for this export only; the live responder
+        # keeps whatever is configured, since 4s per answer is unusable there.
+        provider_type = ("cli" if backend == "cli"
+                         else llm_config.get("provider", "openai").lower())
         if provider_type == "openai":
             provider_config = {
                 "api_key": EnvConfig.get_openai_key(),
@@ -277,14 +314,9 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
             
             if filepath:
                 polish_note = ""
-                if messagebox.askyesno(
-                        "Clean up transcript?",
-                        "Run the transcript through the language model to fix "
-                        "speech-recognition errors before saving?\n\n"
-                        "The original text of every line is kept either way; "
-                        "corrections are stored alongside it.\n\n"
-                        "This can take a minute on a long meeting."):
-                    polish_note = _polish_before_export(conversation_data)
+                backend = _ask_polish_backend()
+                if backend:
+                    polish_note = _polish_before_export(conversation_data, backend)
 
                 if filepath.lower().endswith(".md"):
                     # Markdown is read, so it carries the cleaned text only.
