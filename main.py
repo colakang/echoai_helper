@@ -116,32 +116,29 @@ def _run_first_launch_setup(root=None):
     return False
 
 
-def _offer_restore_on_exit(root):
+def _restore_on_exit(root):
     """
-    Put the system output back when quitting.
+    Put the system output back on the way out, without asking.
 
-    Leaving a machine pointed at the Multi-Output is a confusing state to walk
-    away from: the volume keys do not work on one, and the next thing the user
-    plays comes out at whatever level it was left at. Worth asking, not worth
-    doing silently -- they may be about to start another meeting.
+    This used to be a prompt. It should not be: the user has no way to judge
+    the answer, and the cost of the wrong one is delayed and baffling --
+    macOS cannot control the volume of a Multi-Output device at all, so the
+    volume keys and the menu-bar slider silently stop working, and that is
+    discovered days later with no connection to this app.
+
+    Restores the device that was in use before we took over, rather than
+    guessing: someone listening through an external monitor should not end up
+    on the built-in speakers.
     """
-    if sys.platform != "darwin":
-        root.destroy()
-        return
-
-    try:
-        from src.audio import setup_macos as setup
-        state = setup.inspect()
-        routed = (state.default_output is not None
-                  and state.default_output.uid == setup.MULTI_OUTPUT_UID)
-        if routed and messagebox.askyesno(
-                "Restore audio output?",
-                "System audio is still routed through "
-                f"{setup.MULTI_OUTPUT_NAME!r} for recording.\n\n"
-                "Switch it back to your speakers?"):
-            setup.restore()
-    except Exception as e:
-        print(f"Could not restore the audio output: {e}")
+    if sys.platform == "darwin":
+        try:
+            from src.audio import setup_macos as setup
+            state = setup.inspect()
+            if (state.default_output is not None
+                    and state.default_output.uid == setup.MULTI_OUTPUT_UID):
+                setup.restore()
+        except Exception as e:
+            print(f"Could not restore the audio output: {e}")
 
     root.destroy()
 
@@ -915,7 +912,22 @@ def main():
 
     _run_first_launch_setup(root)
 
-    root.protocol("WM_DELETE_WINDOW", lambda: _offer_restore_on_exit(root))
+    # Make sure system audio is actually going through our Multi-Output.
+    # The user may have other output configurations, or macOS may have moved
+    # the output when a device connected -- either way recording the far end
+    # fails silently if we do not check.
+    if sys.platform == "darwin":
+        try:
+            from src.audio import setup_macos as setup
+            # A previous run that crashed or was force-quit never reached its
+            # restore, leaving the machine on a device whose volume macOS
+            # cannot control. Clear that first, then take the output again.
+            setup.restore(progress=lambda *_: None)
+            setup.ensure_active()
+        except Exception as e:
+            print(f"Could not select the recording output: {e}")
+
+    root.protocol("WM_DELETE_WINDOW", lambda: _restore_on_exit(root))
 
     print("READY")
     root.grid_rowconfigure(0, weight=85)  # 主内容区域占70%

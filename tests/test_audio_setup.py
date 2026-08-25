@@ -184,3 +184,87 @@ def test_restore_does_nothing_when_there_is_nowhere_to_go(fake):
 def test_activate_requires_the_device_to_exist(fake):
     fake([BLACKHOLE, SPEAKERS], default=SPEAKERS)
     assert not setup.activate(progress=lambda *_: None)
+
+
+# --------------------------------------------------------------------------
+# Taking the output, and giving it back
+# --------------------------------------------------------------------------
+#
+# Verified on this machine: with a Multi-Output selected, `get volume
+# settings` returns "missing value" and setting the volume does nothing. The
+# volume keys and the menu-bar slider stop working. Left that way, the user
+# discovers it days later with no connection to this app -- which is why
+# restoring is not something to ask about.
+
+def test_startup_takes_the_output(fake):
+    """Checked rather than assumed: the user may have several output
+    configurations, or macOS may have moved the output when a device
+    connected."""
+    multi = device(setup.MULTI_OUTPUT_NAME, setup.MULTI_OUTPUT_UID)
+    stub = fake([BLACKHOLE, SPEAKERS, multi], default=SPEAKERS)
+
+    assert setup.ensure_active(progress=lambda *_: None)
+    assert stub.default.uid == setup.MULTI_OUTPUT_UID
+
+
+def test_startup_is_a_no_op_when_already_routed(fake):
+    multi = device(setup.MULTI_OUTPUT_NAME, setup.MULTI_OUTPUT_UID)
+    stub = fake([BLACKHOLE, SPEAKERS, multi], default=multi)
+
+    assert setup.ensure_active(progress=lambda *_: None)
+    assert stub.default.uid == setup.MULTI_OUTPUT_UID
+
+
+def test_startup_does_nothing_without_the_device(fake):
+    stub = fake([BLACKHOLE, SPEAKERS], default=SPEAKERS)
+    assert not setup.ensure_active(progress=lambda *_: None)
+    assert stub.default.uid == SPEAKERS.uid
+
+
+def test_the_exact_previous_device_comes_back(monkeypatch, fake, tmp_path):
+    """Someone listening through an external monitor should not end up on the
+    built-in speakers -- which is what guessing would give them."""
+    monitor = device("External Display", "monitor-uid")
+    multi = device(setup.MULTI_OUTPUT_NAME, setup.MULTI_OUTPUT_UID)
+    stub = fake([BLACKHOLE, SPEAKERS, monitor, multi], default=monitor)
+    monkeypatch.setattr(setup, "_state_file",
+                        lambda: str(tmp_path / "previous_output"))
+    monkeypatch.setattr(setup, "_previous_output_uid", None)
+
+    setup.ensure_active(progress=lambda *_: None)
+    assert stub.default.uid == setup.MULTI_OUTPUT_UID
+
+    setup.restore(progress=lambda *_: None)
+    assert stub.default.uid == monitor.uid, "fell back to guessing"
+
+
+def test_the_previous_device_survives_a_crash(monkeypatch, fake, tmp_path):
+    """A force-quit never reaches the restore, so the machine would be left on
+    a device whose volume cannot be controlled. The next launch reads this."""
+    monitor = device("External Display", "monitor-uid")
+    multi = device(setup.MULTI_OUTPUT_NAME, setup.MULTI_OUTPUT_UID)
+    state = tmp_path / "previous_output"
+
+    stub = fake([BLACKHOLE, SPEAKERS, monitor, multi], default=monitor)
+    monkeypatch.setattr(setup, "_state_file", lambda: str(state))
+    monkeypatch.setattr(setup, "_previous_output_uid", None)
+    setup.ensure_active(progress=lambda *_: None)
+
+    assert state.read_text().strip() == monitor.uid
+
+    # A fresh process: nothing in memory, only what is on disk.
+    monkeypatch.setattr(setup, "_previous_output_uid", None)
+    setup.restore(progress=lambda *_: None)
+    assert stub.default.uid == monitor.uid
+
+
+def test_restoring_clears_the_record(monkeypatch, fake, tmp_path):
+    multi = device(setup.MULTI_OUTPUT_NAME, setup.MULTI_OUTPUT_UID)
+    state = tmp_path / "previous_output"
+    fake([BLACKHOLE, SPEAKERS, multi], default=SPEAKERS)
+    monkeypatch.setattr(setup, "_state_file", lambda: str(state))
+    monkeypatch.setattr(setup, "_previous_output_uid", None)
+
+    setup.ensure_active(progress=lambda *_: None)
+    setup.restore(progress=lambda *_: None)
+    assert not state.exists()

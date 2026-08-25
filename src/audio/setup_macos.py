@@ -269,15 +269,75 @@ def activate(progress=print) -> bool:
     return True
 
 
+# What the output was before we took it over, so it can be put back exactly
+# rather than guessed at. A user listening through an external monitor should
+# not find themselves on the built-in speakers afterwards.
+_previous_output_uid: Optional[str] = None
+
+
+def _state_file() -> str:
+    from ..config import PathConfig
+    return os.path.join(PathConfig.get_user_config_path(), "previous_output")
+
+
+def remember_current_output() -> Optional[str]:
+    """
+    Note the output device in use, before switching to the Multi-Output.
+
+    Written to disk as well as held in memory. A clean quit restores from
+    memory, but a crash or a force-quit never reaches that code -- and the
+    machine is then left on a device whose volume macOS cannot control, with
+    nothing to say why. The next launch reads this and puts it back.
+    """
+    global _previous_output_uid
+    current = ca.get_default_output()
+    if current is not None and current.uid != MULTI_OUTPUT_UID:
+        _previous_output_uid = current.uid
+        try:
+            path = _state_file()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(current.uid)
+        except OSError:
+            pass          # in-memory restore still works for a clean quit
+    return _previous_output_uid
+
+
+def _recall_previous_output() -> Optional[str]:
+    if _previous_output_uid:
+        return _previous_output_uid
+    try:
+        with open(_state_file(), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _forget_previous_output() -> None:
+    global _previous_output_uid
+    _previous_output_uid = None
+    try:
+        os.remove(_state_file())
+    except OSError:
+        pass
+
+
 def restore(progress=print) -> bool:
     """
-    Put the system output back to something ordinary.
+    Put the system output back.
 
-    Worth offering: leaving a machine pointed at a Multi-Output after the
-    meeting is a confusing state to walk away from, especially since the
-    volume keys do not work on one.
+    Always worth doing on the way out. Left pointed at a Multi-Output, macOS
+    cannot control the volume at all -- the keys and the menu-bar slider stop
+    working, verified -- and the user finds that out days later with no idea
+    what caused it.
     """
-    target = pick_listening_device()
+    remembered = _recall_previous_output()
+    target = None
+    if remembered:
+        target = next((d for d in ca.list_devices()
+                       if d.uid == remembered), None)
+    target = target or pick_listening_device()
+
     if target is None:
         progress("No other output device to switch back to.")
         return False
@@ -286,12 +346,43 @@ def restore(progress=print) -> bool:
     except OSError as e:
         progress(f"Could not switch back: {e}")
         return False
+    _forget_previous_output()
     progress(f"System audio restored to {target.name!r}.")
+    return True
+
+
+def ensure_active(progress=print) -> bool:
+    """
+    Make sure system audio is going through *our* Multi-Output.
+
+    Checked at startup rather than assumed: the user may have several output
+    configurations, or macOS may have moved the output when a device
+    connected or the machine woke. Recording the far end silently fails if
+    the system is pointed anywhere else.
+    """
+    device = next((d for d in ca.list_devices() if d.uid == MULTI_OUTPUT_UID),
+                  None)
+    if device is None:
+        return False
+
+    current = ca.get_default_output()
+    if current is not None and current.uid == MULTI_OUTPUT_UID:
+        return True
+
+    remember_current_output()
+    try:
+        ca.set_default_output(device.id)
+    except OSError as e:
+        progress(f"Could not switch the output device: {e}")
+        return False
+    progress(f"Switched output to {device.name!r} for recording"
+             + (f" (was {current.name!r})" if current else "") + ".")
     return True
 
 
 def run(auto_activate: bool = True, progress=print) -> SetupState:
     """Do whatever is still missing, then report."""
+    remember_current_output()
     state = inspect()
 
     if state.blackhole is None:
