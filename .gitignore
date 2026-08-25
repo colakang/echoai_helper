@@ -134,6 +134,10 @@ celerybeat.pid
 # Environments
 .env
 .llm
+
+# Credentials. Never in the repo -- one `git add -A` away from being published.
+.pypi-token
+.pypirc
 .llm.*
 
 # Exported transcripts and recordings. Meeting content, never in the repo.
