@@ -10,43 +10,62 @@ class PathConfig:
     
     @staticmethod
     def get_project_root():
-        """获取项目根目录"""
+        """
+        The directory the app was launched from.
+
+        Only meaningful for a source checkout. Anything the app *ships* --
+        conf.yaml, the prompt templates, the default settings -- lives inside
+        the package instead, because once this is installed from a wheel there
+        is no project root: the code lands in site-packages and everything
+        beside it belongs to other packages.
+        """
         if getattr(sys, 'frozen', False):
-            # 打包后的可执行文件目录
             return os.path.dirname(sys.executable)
-        else:
-            # 开发环境中的项目根目录 (src的父目录)
-            return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    @staticmethod
+    def get_package_root():
+        """Where the installed package lives -- the one path that is always real."""
+        return os.path.dirname(os.path.abspath(__file__))
+
     @staticmethod
     def get_resource_path():
-        """获取资源文件目录"""
+        """
+        Shipped, read-only data: prompt templates and default settings.
+
+        Resolved against the package rather than the project, so it is the same
+        directory whether this is a git checkout or a wheel in site-packages.
+        """
         if getattr(sys, 'frozen', False):
-            # 打包后的资源目录
             return os.path.join(sys._MEIPASS, 'resources')
-        else:
-            # 开发环境中的资源目录
-            return os.path.join(PathConfig.get_project_root(), 'resources')
-    
+        return os.path.join(PathConfig.get_package_root(), 'resources')
+
     @staticmethod
     def get_config_path():
         """获取配置文件目录"""
         return os.path.join(PathConfig.get_resource_path(), 'config')
-    
+
     @staticmethod
     def get_prompt_path():
         """获取prompt目录"""
         return os.path.join(PathConfig.get_resource_path(), 'prompt')
 
     @staticmethod
-    def get_templates_path():
-        """获取模板目录"""
-        return os.path.join(PathConfig.get_resource_path(), 'templates')
-        
-    @staticmethod
-    def get_models_path():
-        """获取模型文件目录"""
-        return os.path.join(PathConfig.get_resource_path(), 'models')
+    def get_conf_file():
+        """
+        conf.yaml, preferring the user's own copy.
+
+        The shipped default is inside the package, which is not somewhere
+        anyone can reasonably edit once this is installed from a wheel -- it is
+        in site-packages, and a reinstall overwrites it. So a copy in the user
+        config directory wins if it exists; `echoai-helper config` puts one
+        there. With neither, the shipped defaults are all "auto" and work
+        unedited, which is the common case.
+        """
+        user_copy = os.path.join(PathConfig.get_user_config_path(), "conf.yaml")
+        if os.path.exists(user_copy):
+            return user_copy
+        return os.path.join(PathConfig.get_package_root(), "conf.yaml")
 
     @staticmethod
     def get_user_config_path():

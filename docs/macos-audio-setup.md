@@ -36,7 +36,7 @@ Use `requirements-macos.txt`, not `requirements.txt` — the latter pins
 Everything below can be done in one command:
 
 ```bash
-.venv/bin/python scripts/setup_audio.py
+.venv/bin/python scripts/setup_audio.py      # or: echoai-helper setup
 ```
 
 It installs BlackHole if it is missing, builds the Multi-Output device, and
@@ -121,11 +121,13 @@ enable `You`; it is picked up automatically as the default input device.
 The second command prints the transcript plus a real-time factor (RTF).
 RTF < 1.0 means transcription keeps up with speech.
 
-## 6. Use the GPU (`device: "mps"`)
+## 6. Use the GPU (`device: "auto"`)
 
-`conf.yaml` ships with `device: "mps"` on this branch. **Do not set it back to
-`"cpu"` on Apple Silicon** — it is not a tuning knob, it is the difference
-between keeping up and falling behind.
+`src/conf.yaml` ships with `device: "auto"`, which resolves to Metal on Apple
+Silicon. **Do not pin it to `"cpu"`** — it is not a tuning knob, it is the
+difference between keeping up and falling behind. Nor should you pin it to
+`"mps"`: this file travels between machines, and a device name is wrong on
+every machine that does not have it.
 
 Measured on an M4 Mac mini (16GB), SenseVoiceSmall, one 6.2s phrase in
 accumulate mode (10 progressively longer calls, which is what the app actually

@@ -6,7 +6,7 @@ import time
 import traceback
 
 from .prompts import build_messages
-from .config import SystemConfig, EnvConfig
+from .config import SystemConfig, EnvConfig, PathConfig
 from .llm import create_llm_provider
 import yaml
 from pathlib import Path
@@ -62,7 +62,7 @@ class GPTResponder:
         """
         try:
             # Load configuration file
-            config_path = Path(__file__).parent.parent / "conf.yaml"
+            config_path = PathConfig.get_conf_file()
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
 

@@ -51,7 +51,7 @@ def get_model(use_api):
 class FunASRTranscriber:
     def __init__(self):
         #self.audio_model = whisper.load_model(os.path.join(os.getcwd(), 'small.pt'))
-        with open(f"{PathConfig.get_project_root()}/conf.yaml", "rb") as f:
+        with open(PathConfig.get_conf_file(), "rb") as f:
             self.config = yaml.safe_load(f)
 
         # Honour ASR_MODEL from conf.yaml instead of hardcoding "FunASR",
