@@ -93,93 +93,6 @@ def test_resuming_needs_no_reopen():
     assert not mic.should_emit()
     AudioConfig.set_mic_paused(False)
     assert mic.should_emit(), "resume must not depend on reopening anything"
-
-
-# --------------------------------------------------------------------------
-# Device identity
-# --------------------------------------------------------------------------
-
-sd = pytest.importorskip("sounddevice", reason="macOS capture backend")
-from src.audio import macos                                    # noqa: E402
-
-
-def make_recorder(name, index):
-    source = AudioSource(16000, 2, 1, name)
-    return macos.SoundDeviceRecorder(source, "You", index)
-
-
-def test_a_stable_binding_is_not_disturbed(monkeypatch):
-    mic = make_recorder("Headset", 3)
-    monkeypatch.setattr(mic, "bound_device_name", lambda: "Headset")
-    assert not mic.is_stale({"index": 3, "name": "Headset"})
-
-
-def test_renumbering_underneath_us_is_caught(monkeypatch):
-    """
-    The failure this exists for.
-
-    PortAudio renumbers devices whenever the list changes, so an index taken
-    at launch can come to mean different hardware. The stream stays open and
-    keeps calling back -- it is simply no longer connected to the microphone
-    anyone is talking into, which is indistinguishable from working.
-    """
-    mic = make_recorder("Headset", 3)
-    monkeypatch.setattr(mic, "bound_device_name", lambda: "Some Other Device")
-    assert mic.is_stale({"index": 3, "name": "Headset"})
-
-
-def test_a_device_that_vanished_is_caught(monkeypatch):
-    mic = make_recorder("Headset", 3)
-    monkeypatch.setattr(mic, "bound_device_name", lambda: None)
-    assert mic.is_stale(None)
-
-
-def test_following_the_user_to_a_newly_attached_microphone(monkeypatch):
-    """Plugging in a headset mid-meeting should move the track onto it."""
-    mic = make_recorder("Built-in", 1)
-    monkeypatch.setattr(mic, "bound_device_name", lambda: "Built-in")
-    assert mic.is_stale({"index": 4, "name": "Headset"})
-
-
-def test_silence_is_not_evidence(monkeypatch):
-    """
-    A muted microphone is not a stale one, and must not be treated as one.
-
-    This is the whole reason the check is about identity: a hardware mute
-    delivers exactly the zeroes a dead device does, so anything watching the
-    signal would have to guess. Nothing here looks at the signal at all.
-    """
-    mic = make_recorder("Headset", 3)
-    monkeypatch.setattr(mic, "bound_device_name", lambda: "Headset")
-    AudioConfig.set_mic_paused(True)
-    assert not mic.is_stale({"index": 3, "name": "Headset"})
-
-
-def test_the_far_end_is_never_re_pointed():
-    """
-    follow_default_mic only ever touches the microphone track.
-
-    The loopback device is chosen deliberately during setup and is not the
-    system default input; following the default would drag the meeting audio
-    onto a microphone.
-    """
-    backend = macos.MacOSAudioBackend()
-    speaker = macos.SoundDeviceRecorder(
-        AudioSource(16000, 2, 2, "BlackHole 2ch"), "Speaker", 2)
-    assert backend.follow_default_mic(speaker, None) is speaker
-
-
-def test_no_microphone_at_all_is_survivable(monkeypatch):
-    """Losing the last input device stops the track; it does not crash."""
-    backend = macos.MacOSAudioBackend()
-    mic = make_recorder("Headset", 3)
-    monkeypatch.setattr(mic, "bound_device_name", lambda: None)
-    monkeypatch.setattr(macos, "preferred_mic", lambda: None)
-    monkeypatch.setattr(mic, "stop", lambda: None)
-
-    assert backend.follow_default_mic(mic, None) is None
-
-
 def test_pause_does_not_survive_a_restart():
     """
     Pausing is an in-meeting action, not a preference.
@@ -204,3 +117,152 @@ def test_the_ui_never_writes_pause_to_settings():
     body = app.read_text(encoding="utf-8")
     assert 'update_setting("mic_paused"' not in body
     assert 'get_setting("mic_paused")' not in body
+
+
+# --------------------------------------------------------------------------
+# Liveness: separating a dead device from a quiet one
+# --------------------------------------------------------------------------
+#
+# All of this is pinned to a measurement rather than a guess. On a real
+# Bluetooth disconnect the audio callback stops being invoked entirely -- 0 in
+# 2 seconds -- while a muted microphone keeps being invoked and delivers
+# zeroes. That difference is the only unambiguous signal available: the device
+# list the process can see does not change, no exception is raised, no callback
+# status flag is set, and the one line PortAudio prints goes to a file
+# descriptor no Python code can intercept.
+
+def test_a_callback_marks_the_device_alive():
+    mic = FakeRecorder("You")
+    mic.last_callback -= 60
+    assert mic.silent_for() > 59
+    mic.note_callback()
+    assert mic.silent_for() < 1
+
+
+def test_pausing_still_counts_as_alive():
+    """
+    The reason liveness counts callbacks and not emitted audio.
+
+    While paused, the device is still calling us and we are throwing the audio
+    away. If liveness were measured at the emit point, pausing your own
+    microphone would look exactly like the device dying, and the app would tear
+    down and rebuild the audio stack because the user ticked a box.
+    """
+    mic = FakeRecorder("You")
+    AudioConfig.set_mic_paused(True)
+    mic.note_callback()          # the device is still delivering
+    mic.feed(b"dropped")
+
+    assert mic.emitted == [], "audio must still be dropped while paused"
+    assert mic.silent_for() < 1, "but the device must not look dead"
+
+
+def test_a_silent_room_is_not_a_dead_device():
+    """Nobody talking still produces callbacks -- of room noise, or of zeroes."""
+    mic = FakeRecorder("You")
+    for _ in range(10):
+        mic.note_callback()
+    assert mic.silent_for() < 1
+
+
+def test_a_device_that_stops_calling_is_detected():
+    from src.app import MIC_DEAD_AFTER_SECONDS
+    mic = FakeRecorder("You")
+    mic.last_callback -= MIC_DEAD_AFTER_SECONDS + 1
+    assert mic.silent_for() > MIC_DEAD_AFTER_SECONDS
+
+
+# --------------------------------------------------------------------------
+# Shutdown
+# --------------------------------------------------------------------------
+
+def test_closing_the_window_stops_the_heartbeat_first():
+    """
+    Order matters. Closing the window stops the capture streams, at which
+    point callbacks stop -- which is precisely the signature of a dead device.
+    Without the flag being set first, quitting the app would trigger a rebuild
+    of the audio stack underneath a window that is already going away.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._restore_on_exit)
+    assert "_shutting_down.set()" in body
+    assert body.index("_shutting_down.set()") < body.index("session.close()"), \
+        "the heartbeat must be stopped before anything is torn down"
+
+
+def test_the_heartbeat_cannot_outlive_the_process():
+    """
+    Three ways out, and none may leave the thread running:
+    the window closing (the event), an exception or SIGTERM (atexit), and
+    SIGKILL (the daemon flag, since a daemon thread cannot hold the process
+    open).
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._start_mic_heartbeat)
+    assert "atexit.register(_shutting_down.set)" in body
+    assert "daemon=True" in body
+
+
+def test_the_watch_loop_rechecks_the_flag_after_sleeping():
+    """
+    A one-second sleep sits between the two checks. Without the second one,
+    shutdown that lands mid-sleep still gets a full pass of the loop -- long
+    enough to start rebuilding devices on the way out.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._start_mic_heartbeat)
+    after_sleep = body.split("time.sleep(MIC_HEARTBEAT_POLL_SECONDS)", 1)[1]
+    assert "_shutting_down.is_set()" in after_sleep.split("silent_for")[0]
+
+
+def test_an_absent_microphone_keeps_being_retried():
+    """
+    The bug this pins: `if mic is None: continue`.
+
+    After a rebuild finds no device the recorder is None, and treating None as
+    "nothing to do" is exactly backwards -- it is the state most in need of
+    doing something. Written that way, the heartbeat gave up permanently the
+    first time a headset was not back yet, and the microphone stayed dead for
+    the rest of the meeting no matter what the user plugged in.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._start_mic_heartbeat)
+    guard = [l for l in body.splitlines() if "silent_for() <" in l]
+    assert guard, "expected a liveness guard"
+    assert "mic is None or" not in guard[0], \
+        "None must not short-circuit the retry -- it is the case that needs it"
+    assert "mic is not None and" in guard[0]
+
+
+def test_the_far_end_is_not_torn_down_to_discover_there_is_no_microphone():
+    """
+    Rebuilding invalidates every stream in the process, the meeting track
+    included, and costs a measured 378ms of recording. Asking CoreAudio first
+    -- which answers live, unlike PortAudio inside a running process -- makes a
+    headset left switched off cost nothing instead of punching a hole in the
+    recording on every retry.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._start_mic_heartbeat)
+    assert "a_microphone_exists()" in body
+    # Against the call, not the hasattr guard at the top of the function.
+    assert body.index("a_microphone_exists()") < body.index("backend.restart_capture("), \
+        "the cheap check must come before the expensive rebuild"
+
+
+def test_the_microphone_check_does_not_ask_portaudio():
+    """
+    PortAudio enumerates once at Pa_Initialize and never again, so inside a
+    running process it cannot see a headset leave or return. Asking it here
+    would make the check always agree with startup and never notice anything.
+    """
+    import inspect
+    from src.audio import macos
+    body = inspect.getsource(macos.a_microphone_exists)
+    assert "coreaudio" in body
+    assert "sd." not in body and "query_devices" not in body

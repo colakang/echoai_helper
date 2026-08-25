@@ -4,6 +4,7 @@
 import math
 import os
 import threading
+import unicodedata
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -17,14 +18,24 @@ from .asr.vad import VAD
 
 
 def _asr_device() -> str:
-    """Reuse whatever device the ASR is configured for."""
+    """
+    Reuse whatever device the ASR is configured for.
+
+    Resolved, not returned raw. conf.yaml ships "auto" so that a config file
+    written on one machine is not wrong on the next -- but "auto" is not a
+    torch device, and handing it over unresolved makes the speaker embedder
+    fail to load. It fails quietly, too: diarization just stops producing
+    labels, which looks like a model that cannot tell voices apart rather than
+    one that never started.
+    """
     try:
         import yaml
         from .config import PathConfig
+        from .TranscriberModels import resolve_device
         with open(PathConfig.get_conf_file(), "rb") as f:
             config = yaml.safe_load(f)
         name = config.get("ASR_MODEL", "FunASR")
-        return config.get(name, {}).get("device", "cpu")
+        return resolve_device(config.get(name, {}).get("device", "auto"))
     except Exception:
         return "cpu"
 
@@ -144,6 +155,41 @@ class AudioTranscriber:
         self._embedder = SpeakerEmbedder(device=_asr_device())
         self._registries = {name: SpeakerRegistry() for name in self.audio_sources}
 
+
+    def attach_source(self, name, source):
+        """
+        Add a track that did not exist when this was built.
+
+        A machine with no built-in microphone -- a Mac mini -- starts with no
+        "You" track at all, and the ordinary way it gets one is somebody
+        attaching a headset after the app is already open. Without this, that
+        headset is captured and then dropped on the floor for the rest of the
+        meeting, with nothing on screen to say so.
+
+        Idempotent: re-attaching a track that already exists leaves its
+        buffers, language history and speaker registry alone, because a device
+        moving is not a reason to forget what has been said on that track.
+        """
+        if source is None or name in self.audio_sources:
+            return False
+
+        self.audio_sources[name] = {
+            "sample_rate": source.SAMPLE_RATE,
+            "sample_width": source.SAMPLE_WIDTH,
+            "channels": source.channels,
+            "last_spoken": None,
+            "first_spoken": None,
+            "new_phrase": True,
+        }
+        self.source_locks[name] = threading.Lock()
+        self.segmenters[name] = SpeechSegmenter(VAD(_vad_model_path()),
+                                                SegmenterConfig())
+        self.trackers[name] = HypothesisTracker()
+        self._session_language[name] = None
+        self._registries[name] = SpeakerRegistry()
+        self.transcript_data.setdefault(name, [])
+        print(f"[INFO] '{name}' track enabled — {getattr(source, 'device_name', '?')!r}")
+        return True
 
     def transcribe_audio_queue(self, audio_queue):
         """
@@ -305,7 +351,23 @@ class AudioTranscriber:
 
     @staticmethod
     def _is_usable(text) -> bool:
-        return bool(text) and text.strip() != ""
+        """
+        Whether a transcription carries anything worth keeping.
+
+        Empty is the obvious case. The one that matters in practice is text
+        made entirely of punctuation: room noise passes the VAD, reaches the
+        model, and comes back as a bare ".". In the 84-minute meeting on
+        record that accounted for 169 of 1312 lines -- 12.9% -- and each one
+        was written to the transcript, exported, and then paid for again as
+        tokens when the cleanup pass sent it to a language model.
+
+        The test is for any letter, digit or CJK character anywhere. Nothing
+        legitimate fails it: a line with no such character has no content to
+        lose, in any of the five languages this transcribes.
+        """
+        if not text or not text.strip():
+            return False
+        return any(unicodedata.category(c)[0] in ("L", "N") for c in text)
 
     def apply_segmenter_config(self, config) -> None:
         """

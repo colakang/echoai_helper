@@ -44,6 +44,8 @@ language model to clean up the finished transcript.
 - **Markdown and JSON export** — Markdown to read, JSON as a complete record
 - **Pause your own track** — muting yourself in the meeting app does not reach
   this one, and pausing roughly halves the model's work
+- **Recovers a lost microphone** — a Bluetooth headset that drops out is
+  detected and capture is rebuilt, rather than silently recording nothing
 - **Live reply suggestions** — for interviews, where a prompt is wanted while the
   other person is still talking
 
@@ -233,13 +235,16 @@ echoai-helper setup --status        # what routing is in place
 and remembers them. Set its speaker to `EchoAI Meeting`.
 
 **Nothing from the microphone over Bluetooth.** A Bluetooth headset can only send
-its microphone to one device; if it is on a phone call, the Mac gets silence. The
-microphone track now re-checks every few seconds that it is still bound to the
-device actually in use, and moves itself when that changes — which covers the
-case where the device list is renumbered underneath it. A headset that stays
-connected and simply stops delivering audio is not covered, because nothing can
-tell that apart from a hardware mute: both send digital silence. A wired or USB
-microphone avoids the whole area.
+its microphone to one device; if it is on a phone call, the Mac gets silence.
+This now recovers on its own: the app notices within about five seconds that the
+device has stopped delivering, waits without touching anything while no
+microphone is available, and rebuilds capture as soon as one is. You will see it
+in the log:
+
+```
+[WARN] You: no audio for 31s — the device is gone. Rebuilding capture.
+[INFO] You: capture restored on 'Your Headset'
+```
 
 **You are muted in the meeting but still being transcribed.** Expected — muting
 in Zoom or WeChat silences your outgoing audio, not this app's own input stream.
@@ -270,13 +275,11 @@ routing, what has been measured, and where the sharp edges are.
 
 ## 📝 Known limitations
 
-- **A microphone that goes quiet without going away is not detected.** The track
-  now follows the device it should be on, which covers a device list renumbered
-  underneath it — the most likely cause of what was seen on a real call. A
-  headset that stays present and silently stops delivering is not covered, and
-  deliberately so: it is indistinguishable from a hardware mute, and an alert
-  that fires on a muted microphone is one users learn to ignore. Reports with
-  details are what would settle it.
+- **Recovering the microphone interrupts the meeting audio for ~0.4s.** When a
+  device dies, PortAudio can only be recovered by restarting it, which
+  invalidates every open stream — so the far-end track is rebuilt too, whether
+  or not anything was wrong with it. Measured at 378ms. It buys back a
+  microphone track that would otherwise be dead for the rest of the call.
 - **Speaker labelling is tuned against a clean two-party recording** and
   over-splits on group calls over a lossy connection. Merging at export is the
   workaround, not the cure.

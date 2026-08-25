@@ -51,6 +51,28 @@ def list_input_devices() -> List[dict]:
     return devices
 
 
+def a_microphone_exists() -> bool:
+    """
+    Whether the system currently has a real microphone, asked of CoreAudio.
+
+    Deliberately not asked of PortAudio. PortAudio enumerates devices once at
+    Pa_Initialize and never again, so inside a running process its answer is
+    frozen at whatever was true at startup -- it cannot see a headset leave and
+    it cannot see one come back. CoreAudio answers live, and answering this
+    cheaply is what keeps the far-end recording from being torn down every
+    thirty seconds while a headset sits switched off in a drawer.
+    """
+    try:
+        from . import coreaudio
+        return any(getattr(d, "input_channels", 0) > 0
+                   and not _looks_like_loopback(d.name)
+                   for d in coreaudio.list_devices())
+    except Exception:
+        # Unknowable rather than false: claiming there is no microphone would
+        # stop recovery from ever being attempted.
+        return True
+
+
 def preferred_mic() -> Optional[dict]:
     """
     The device the microphone track should be on *right now*.
@@ -102,6 +124,7 @@ class SoundDeviceRecorder(Recorder):
         self._queue = audio_queue
 
         def callback(indata, frames, time_info, status):
+            self.note_callback()
             if status:
                 # Overflows are normal under load; log once per occurrence
                 # rather than raising, so a hiccup never kills capture.
@@ -132,38 +155,6 @@ class SoundDeviceRecorder(Recorder):
         # the pipeline already assumes.
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         self._queue.put((self.source_name, chunk, now))
-
-    def bound_device_name(self) -> Optional[str]:
-        """What this recorder's index resolves to *now*, or None if it is gone."""
-        try:
-            return sd.query_devices(self.device_index)["name"]
-        except Exception:
-            return None
-
-    def is_stale(self, expected: Optional[dict]) -> bool:
-        """
-        Whether this recorder is no longer on the device it should be.
-
-        Two independent ways that happens, and both are checked because they
-        fail differently:
-
-        - the index now resolves to some other device, or to nothing -- the
-          list was renumbered underneath us and we are reading the wrong
-          hardware while believing we are fine;
-        - the device that *should* be recorded from has changed -- someone
-          plugged in a headset, or the one we were using went away.
-
-        This is a question about identity, not about liveness. It is answered
-        by comparing names, so there is nothing to tune and nothing to
-        false-positive on: a muted microphone and a silent room look exactly
-        alike here, and neither one looks like this.
-        """
-        current = self.bound_device_name()
-        if current is None or current != self.device_name:
-            return True
-        if expected is not None and expected["name"] != self.device_name:
-            return True
-        return False
 
     def stop(self) -> None:
         if self._stream is not None:
@@ -230,38 +221,47 @@ class MacOSAudioBackend(AudioBackend):
 
         return self._build(loopbacks[0]["index"], "Speaker")
 
-    def follow_default_mic(self, recorder: Optional[SoundDeviceRecorder],
-                           audio_queue: "_queue.Queue"
-                           ) -> Optional[SoundDeviceRecorder]:
+    def restart_capture(self, recorders, queues):
         """
-        Re-point the microphone track at the device that should be recorded now.
+        Rebuild every capture stream after a device came back.
 
-        Returns the recorder to keep using -- the same object when nothing has
-        moved, a new one when it has, and None when there is no microphone at
-        all any more.
+        Measured, because none of it is guessable from the API:
 
-        Deliberately not a liveness check. Deciding a stream has "gone quiet"
-        cannot distinguish a dead device from a muted one or a silent room: a
-        hardware mute delivers exactly the digital zeroes a lost device does.
-        This asks a question that does have an answer -- are we bound to the
-        right device -- and acts only on that.
+        - Reopening the dead stream on its remembered index fails with
+          PaErrorCode -9986 *even once the device is genuinely back*. Whatever
+          PortAudio cached for that device is poisoned by the disconnect.
+        - Only Pa_Terminate followed by Pa_Initialize recovers it -- and that
+          invalidates every open stream in the process, so the far-end track
+          has to be torn down and rebuilt too, whether or not anything was
+          wrong with it.
+        - The whole cycle costs 378ms (median of 3, tight spread). That is the
+          gap punched in the meeting recording, and it buys back a microphone
+          track that would otherwise be dead for the rest of the call.
+
+        Returns the replacement recorders, keyed as they came in. A track whose
+        device did not come back maps to None rather than raising: losing your
+        own microphone must not also stop the meeting being recorded.
         """
-        if recorder is None or recorder.source_name != Recorder.PAUSABLE:
-            return recorder
+        for recorder in recorders.values():
+            if recorder is not None:
+                recorder.stop()
 
-        expected = preferred_mic()
-        if not recorder.is_stale(expected):
-            return recorder
+        sd._terminate()
+        sd._initialize()
 
-        was = recorder.device_name
-        recorder.stop()
-
-        if expected is None:
-            print(f"[WARN] You: {was!r} is gone and there is no other "
-                  f"microphone; your track has stopped.")
-            return None
-
-        replacement = self._build(expected["index"], Recorder.PAUSABLE)
-        replacement.record_into_queue(audio_queue)
-        print(f"[INFO] You: microphone moved {was!r} -> {expected['name']!r}")
-        return replacement
+        rebuilt = {}
+        for name, recorder in recorders.items():
+            if recorder is None:
+                rebuilt[name] = None
+                continue
+            wanted = (preferred_mic() if name == Recorder.PAUSABLE
+                      else next((d for d in list_input_devices()
+                                 if d["is_loopback"]), None))
+            if wanted is None:
+                print(f"[WARN] {name}: no device to capture from after the restart")
+                rebuilt[name] = None
+                continue
+            replacement = self._build(wanted["index"], name)
+            replacement.record_into_queue(queues[name])
+            rebuilt[name] = replacement
+        return rebuilt

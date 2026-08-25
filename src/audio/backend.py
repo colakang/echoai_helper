@@ -17,6 +17,7 @@ resampling to the rate the ASR model wants happens later, in AudioTranscriber.
 from abc import ABC, abstractmethod
 from typing import Optional
 import queue
+import time
 
 # Emit a chunk this often (seconds).  Matches the historical Windows
 # `phrase_time_limit` so downstream phrase timing is unchanged.
@@ -75,6 +76,30 @@ class Recorder(ABC):
             raise ValueError("audio source can't be None")
         self.source = source
         self.source_name = source_name
+        # When the device last handed us anything at all. Monotonic, because
+        # this is a duration and the wall clock can move under it.
+        self.last_callback = time.monotonic()
+
+    def note_callback(self) -> None:
+        """
+        Record that the device is still delivering.
+
+        Called at the very top of the audio callback, before any decision about
+        what to do with the audio -- which is the whole point. Measured on a
+        real Bluetooth disconnect: the callback stops being invoked entirely
+        (0 in 2s), while a *muted* microphone keeps being invoked and simply
+        delivers zeroes. Counting invocations therefore separates "the device
+        is gone" from "nobody is talking" and from "the user paused us", with
+        no threshold and nothing to tune.
+
+        Counting emitted chunks instead would collapse all three together, and
+        pausing your own microphone would look exactly like the device dying.
+        """
+        self.last_callback = time.monotonic()
+
+    def silent_for(self) -> float:
+        """Seconds since the device last called us."""
+        return time.monotonic() - self.last_callback
 
     def should_emit(self) -> bool:
         """
