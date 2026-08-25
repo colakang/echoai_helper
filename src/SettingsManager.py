@@ -27,7 +27,9 @@ class SettingsManager:
         "window_opacity": 1.0,
         "window_topmost": False,
         "record_only_mode": False,  # 添加新设置项
-        "diarization": False
+        "diarization": False,
+        # Remembered so the first-run setup asks once, not every launch.
+        "setup_declined": False
     }
     
     def __init__(self):

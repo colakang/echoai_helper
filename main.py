@@ -60,6 +60,92 @@ def update_response_UI(responder, textbox, freeze_state, transcript_ui):
                   transcript_ui)
 
     
+def _run_first_launch_setup(root=None):
+    """
+    Offer to finish setup the first time this is run.
+
+    Capture needs a virtual audio device and a Multi-Output routing system
+    sound through it as well as the speakers. Asking a user to build that in
+    Audio MIDI Setup before their first meeting loses most of them, and there
+    is no reason to: all of it is scriptable, and only the driver install
+    needs a password.
+
+    Declining is remembered, so this asks once rather than at every launch.
+    """
+    if sys.platform != "darwin":
+        return True
+
+    from src.audio import setup_macos as setup
+
+    state = setup.inspect()
+    if state.blackhole is not None and state.multi_output is not None:
+        return True
+
+    settings = SettingsManager()
+    if settings.get_setting("setup_declined"):
+        print("[INFO] Audio routing is incomplete; run "
+              "scripts/setup_audio.py to finish it.")
+        return False
+
+    needs_install = state.blackhole is None
+    detail = ("EchoAI Helper needs a virtual audio device to hear the other "
+              "side of a call, and a Multi-Output device so you still hear it "
+              "yourself.\n\nSet this up now?")
+    if needs_install:
+        detail += ("\n\nmacOS will ask for your password once, to install the "
+                   "audio driver.")
+
+    if not messagebox.askyesno("Finish setting up audio?", detail):
+        settings.update_setting("setup_declined", True)
+        messagebox.showinfo(
+            "Recording is limited",
+            "Without it, only your microphone is recorded — not the other "
+            "side of the call.\n\nRun scripts/setup_audio.py whenever you "
+            "want to finish.")
+        return False
+
+    state = setup.run(auto_activate=True)
+    if state.ready:
+        messagebox.showinfo("Ready",
+                            "Meeting audio will now be both heard and recorded.")
+        return True
+
+    messagebox.showwarning(
+        "Setup did not finish",
+        "Some of it could not be completed:\n\n" + state.describe())
+    return False
+
+
+def _offer_restore_on_exit(root):
+    """
+    Put the system output back when quitting.
+
+    Leaving a machine pointed at the Multi-Output is a confusing state to walk
+    away from: the volume keys do not work on one, and the next thing the user
+    plays comes out at whatever level it was left at. Worth asking, not worth
+    doing silently -- they may be about to start another meeting.
+    """
+    if sys.platform != "darwin":
+        root.destroy()
+        return
+
+    try:
+        from src.audio import setup_macos as setup
+        state = setup.inspect()
+        routed = (state.default_output is not None
+                  and state.default_output.uid == setup.MULTI_OUTPUT_UID)
+        if routed and messagebox.askyesno(
+                "Restore audio output?",
+                "System audio is still routed through "
+                f"{setup.MULTI_OUTPUT_NAME!r} for recording.\n\n"
+                "Switch it back to your speakers?"):
+            setup.restore()
+    except Exception as e:
+        print(f"Could not restore the audio output: {e}")
+
+    root.destroy()
+
+
 def _ask_polish_backend():
     """
     Ask whether to clean the transcript, and on what.
@@ -741,6 +827,10 @@ def main():
     # 允许窗口在任务栏显示 (Windows-only Tk attribute; macOS raises TclError)
     if sys.platform == "win32":
         root.wm_attributes('-toolwindow', False)
+
+    _run_first_launch_setup(root)
+
+    root.protocol("WM_DELETE_WINDOW", lambda: _offer_restore_on_exit(root))
 
     print("READY")
     root.grid_rowconfigure(0, weight=85)  # 主内容区域占70%

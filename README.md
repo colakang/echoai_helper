@@ -91,6 +91,27 @@ Want to contribute? Check out our [contribution guidelines](CONTRIBUTING.md)!
 
 ## ⚡ Quick Start
 
+### macOS
+
+```bash
+uv tool install echoai-helper     # uv brings its own Python 3.12
+echoai-helper setup               # audio routing; one password prompt
+echoai-helper install-launcher    # adds an icon to Launchpad
+```
+
+Then launch it from Launchpad, or run `echoai-helper`.
+
+`setup` installs a virtual audio device and builds the Multi-Output that lets
+you hear a meeting while it is being recorded. macOS asks for a password once,
+because that installs an audio driver; nothing else needs a privilege.
+
+Speech models (~1.5GB) download on first run.
+
+When a meeting is over, `echoai-helper setup --restore` puts your audio output
+back — the app also offers to do this when you quit.
+
+### Windows
+
 ```bash
 # Create conda environment
 conda create -n echoai python=3.10.13
