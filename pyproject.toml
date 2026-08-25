@@ -17,7 +17,13 @@ keywords = ["transcription", "asr", "meeting-notes", "diarization", "funasr"]
 # both were removed from the standard library in 3.13.
 
 dependencies = [
-    "sounddevice",
+    # Capture is platform-split. macOS records system output through a
+    # virtual audio device via sounddevice; Windows uses WASAPI loopback,
+    # which only PyAudioWPatch exposes and which has no macOS build at all.
+    # Declaring both unconditionally would make the install fail on the
+    # platform that cannot have the other.
+    "sounddevice; sys_platform != 'win32'",
+    "PyAudioWPatch; sys_platform == 'win32'",
     "numpy<2",                # funasr and torch still assume the 1.x ABI
     "scipy",
     "torch",
