@@ -1,5 +1,6 @@
 # 🎙️ EchoAI Helper
 
+[![PyPI](https://img.shields.io/pypi/v/echoai-helper.svg)](https://pypi.org/project/echoai-helper/)
 [![GitHub Stars](https://img.shields.io/github/stars/colakang/echoai_helper?style=social)](https://github.com/colakang/echoai_helper/stargazers)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://python.org)
@@ -105,6 +106,29 @@ a call is capturable without a virtual device. The macOS-only commands (`setup`,
 `install-launcher`) report that there is nothing to do. See
 [known limitations](#-known-limitations) — this path has not been re-tested since
 the segmentation rework.
+
+### What has actually been tested
+
+Stated precisely, because "should work" and "has been run" are different
+claims and the difference matters when you are deciding whether to install it.
+
+| | Install | Live meeting | Notes |
+|---|---|---|---|
+| **M4 Mac mini, 16GB, macOS 26.3, Python 3.12** | ✅ | ✅ | The development machine. Every measurement in this README comes from it. |
+| **Other Apple Silicon** (M1–M3) | — | — | Same wheels, same Metal path. Expected to work; not run. |
+| **Intel Mac** | ✅ resolves | ❌ | Installs — `uv` falls back to torch 2.2.2 — but no Metal, so CPU only. See [known limitations](#-known-limitations). |
+| **Windows 10/11** | ✅ resolves | ❌ | Dependencies resolve. The capture path has not been run since the segmentation rework. |
+
+"Live meeting" means real calls, in Mandarin, Cantonese and English, with the
+transcript exported afterwards — not a smoke test. The longest was 84 minutes
+and 1311 lines.
+
+The Mac mini has no built-in microphone, so the microphone track has only been
+exercised through a Bluetooth headset and a wired input. That is also where the
+[Bluetooth limitation](#-known-limitations) below was found.
+
+If you run it somewhere not on this list, an issue saying so — working or
+not — is genuinely useful.
 
 ### First run
 
