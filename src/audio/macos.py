@@ -51,6 +51,26 @@ def list_input_devices() -> List[dict]:
     return devices
 
 
+def preferred_mic() -> Optional[dict]:
+    """
+    The device the microphone track should be on *right now*.
+
+    Same rule create_mic_recorder() uses at startup -- the system default input
+    if it is a real microphone, otherwise the first one -- but evaluated
+    against the current device list rather than the one that existed when the
+    app launched.
+    """
+    candidates = [d for d in list_input_devices() if not d["is_loopback"]]
+    if not candidates:
+        return None
+    try:
+        default_in = sd.default.device[0]
+    except Exception:
+        default_in = None
+    return next((c for c in candidates if c["index"] == default_in),
+                candidates[0])
+
+
 class SoundDeviceRecorder(Recorder):
     """
     Streams from one input device, emitting fixed ~0.6s int16 PCM chunks.
@@ -63,6 +83,12 @@ class SoundDeviceRecorder(Recorder):
     def __init__(self, source: AudioSource, source_name: str, device_index: int):
         super().__init__(source, source_name)
         self.device_index = device_index
+        # The name is the identity; the index is only a handle to it.
+        # PortAudio renumbers devices whenever the list changes, so an index
+        # captured at launch can quietly come to mean a different device --
+        # which is what a Bluetooth headset handing its microphone to a phone
+        # does to us. Keeping the name is what makes that detectable.
+        self.device_name = source.device_name
         self._stream: Optional[sd.InputStream] = None
         self._queue: Optional[_queue.Queue] = None
         self._buffer = bytearray()
@@ -100,17 +126,54 @@ class SoundDeviceRecorder(Recorder):
               f"({self.source.SAMPLE_RATE}Hz, {self.source.channels}ch)")
 
     def _emit(self, chunk: bytes) -> None:
-        if not chunk:
+        if not chunk or not self.should_emit():
             return
         # utcnow() is deprecated in 3.12; keep the naive-UTC value the rest of
         # the pipeline already assumes.
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         self._queue.put((self.source_name, chunk, now))
 
+    def bound_device_name(self) -> Optional[str]:
+        """What this recorder's index resolves to *now*, or None if it is gone."""
+        try:
+            return sd.query_devices(self.device_index)["name"]
+        except Exception:
+            return None
+
+    def is_stale(self, expected: Optional[dict]) -> bool:
+        """
+        Whether this recorder is no longer on the device it should be.
+
+        Two independent ways that happens, and both are checked because they
+        fail differently:
+
+        - the index now resolves to some other device, or to nothing -- the
+          list was renumbered underneath us and we are reading the wrong
+          hardware while believing we are fine;
+        - the device that *should* be recorded from has changed -- someone
+          plugged in a headset, or the one we were using went away.
+
+        This is a question about identity, not about liveness. It is answered
+        by comparing names, so there is nothing to tune and nothing to
+        false-positive on: a muted microphone and a silent room look exactly
+        alike here, and neither one looks like this.
+        """
+        current = self.bound_device_name()
+        if current is None or current != self.device_name:
+            return True
+        if expected is not None and expected["name"] != self.device_name:
+            return True
+        return False
+
     def stop(self) -> None:
         if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception as exc:
+                # A device that has already gone raises on close. Nothing left
+                # to release, and refusing to move on would strand the track.
+                print(f"[WARN] {self.source_name}: closing the stream failed: {exc}")
             self._stream = None
             print(f"[INFO] {self.source_name}: capture stopped")
 
@@ -166,3 +229,39 @@ class MacOSAudioBackend(AudioBackend):
             return None
 
         return self._build(loopbacks[0]["index"], "Speaker")
+
+    def follow_default_mic(self, recorder: Optional[SoundDeviceRecorder],
+                           audio_queue: "_queue.Queue"
+                           ) -> Optional[SoundDeviceRecorder]:
+        """
+        Re-point the microphone track at the device that should be recorded now.
+
+        Returns the recorder to keep using -- the same object when nothing has
+        moved, a new one when it has, and None when there is no microphone at
+        all any more.
+
+        Deliberately not a liveness check. Deciding a stream has "gone quiet"
+        cannot distinguish a dead device from a muted one or a silent room: a
+        hardware mute delivers exactly the digital zeroes a lost device does.
+        This asks a question that does have an answer -- are we bound to the
+        right device -- and acts only on that.
+        """
+        if recorder is None or recorder.source_name != Recorder.PAUSABLE:
+            return recorder
+
+        expected = preferred_mic()
+        if not recorder.is_stale(expected):
+            return recorder
+
+        was = recorder.device_name
+        recorder.stop()
+
+        if expected is None:
+            print(f"[WARN] You: {was!r} is gone and there is no other "
+                  f"microphone; your track has stopped.")
+            return None
+
+        replacement = self._build(expected["index"], Recorder.PAUSABLE)
+        replacement.record_into_queue(audio_queue)
+        print(f"[INFO] You: microphone moved {was!r} -> {expected['name']!r}")
+        return replacement

@@ -66,11 +66,30 @@ class AudioSource:
 class Recorder(ABC):
     """Pushes PCM chunks from one source into a queue until stopped."""
 
+    # The track a pause applies to. Only the local microphone can be paused:
+    # the far end is the meeting, and silencing it would just lose the notes.
+    PAUSABLE = "You"
+
     def __init__(self, source: AudioSource, source_name: str):
         if source is None:
             raise ValueError("audio source can't be None")
         self.source = source
         self.source_name = source_name
+
+    def should_emit(self) -> bool:
+        """
+        Whether captured audio should be forwarded right now.
+
+        Dropped at the emit point rather than by stopping the stream. Closing
+        and reopening a device is the fragile operation here -- it is how the
+        microphone gets lost in the first place -- so a pause that has to
+        reopen on resume would be trading a certain risk for a saved handle
+        nobody needs. The stream stays up; the chunks go nowhere.
+        """
+        if self.source_name != self.PAUSABLE:
+            return True
+        from src.config import AudioConfig
+        return not AudioConfig.get_mic_paused()
 
     @abstractmethod
     def record_into_queue(self, audio_queue: "queue.Queue") -> None:

@@ -228,6 +228,27 @@ class AudioConfig:
     # the entire point and paying for it is the trade.
     _live_partials = False
 
+    # Whether the microphone track is paused.
+    #
+    # Muting yourself in the meeting app does not reach us -- we hold our own
+    # input stream, and Zoom or WeChat silencing your outgoing audio has no
+    # effect on what CoreAudio hands this process. So a meeting spent muted
+    # still fills the transcript with your side of the room.
+    #
+    # It is also the cheapest real-time headroom available: the measured
+    # real-time factor is a *dual-track* figure, so dropping one track roughly
+    # halves the model's work. On a machine that is only just keeping up, this
+    # is the difference.
+    _mic_paused = False
+
+    @classmethod
+    def get_mic_paused(cls):
+        return cls._mic_paused
+
+    @classmethod
+    def set_mic_paused(cls, value: bool):
+        cls._mic_paused = bool(value)
+
     @classmethod
     def get_live_partials(cls):
         return cls._live_partials

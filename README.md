@@ -42,6 +42,8 @@ language model to clean up the finished transcript.
   the surrounding conversation, through an API key or through a coding-agent CLI
   on a subscription you already pay for
 - **Markdown and JSON export** — Markdown to read, JSON as a complete record
+- **Pause your own track** — muting yourself in the meeting app does not reach
+  this one, and pausing roughly halves the model's work
 - **Live reply suggestions** — for interviews, where a prompt is wanted while the
   other person is still talking
 
@@ -231,9 +233,18 @@ echoai-helper setup --status        # what routing is in place
 and remembers them. Set its speaker to `EchoAI Meeting`.
 
 **Nothing from the microphone over Bluetooth.** A Bluetooth headset can only send
-its microphone to one device. If it is on a phone call, the Mac gets silence —
-and the stream does not recover on its own; restart the app. A USB microphone
-avoids this entirely.
+its microphone to one device; if it is on a phone call, the Mac gets silence. The
+microphone track now re-checks every few seconds that it is still bound to the
+device actually in use, and moves itself when that changes — which covers the
+case where the device list is renumbered underneath it. A headset that stays
+connected and simply stops delivering audio is not covered, because nothing can
+tell that apart from a hardware mute: both send digital silence. A wired or USB
+microphone avoids the whole area.
+
+**You are muted in the meeting but still being transcribed.** Expected — muting
+in Zoom or WeChat silences your outgoing audio, not this app's own input stream.
+Use **Pause Mic**. It resets to off every launch, deliberately: a pause that
+survived a restart would look like recording and not be.
 
 **More speakers than people.** Voice prints drift with volume and connection
 quality, so one person can end up split across several labels. Set the number of
@@ -259,9 +270,13 @@ routing, what has been measured, and where the sharp edges are.
 
 ## 📝 Known limitations
 
-- **A dead microphone stream does not recover.** Seen on a real call: capture
-  stops silently and the app looks like it is still working. Restarting fixes it.
-  This is the most consequential item on the list.
+- **A microphone that goes quiet without going away is not detected.** The track
+  now follows the device it should be on, which covers a device list renumbered
+  underneath it — the most likely cause of what was seen on a real call. A
+  headset that stays present and silently stops delivering is not covered, and
+  deliberately so: it is indistinguishable from a hardware mute, and an alert
+  that fires on a muted microphone is one users learn to ignore. Reports with
+  details are what would settle it.
 - **Speaker labelling is tuned against a clean two-party recording** and
   over-splits on group calls over a lossy connection. Merging at export is the
   workaround, not the cure.

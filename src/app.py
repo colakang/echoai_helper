@@ -757,6 +757,42 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     )
     diarize_checkbox.pack(side="left", padx=(0, 5))
 
+    # Stop transcribing your own microphone.
+    #
+    # Muting yourself in the meeting app does not reach us: we hold our own
+    # input stream, and Zoom or WeChat silencing your outgoing audio changes
+    # nothing about what CoreAudio hands this process. A meeting spent muted
+    # still fills your side of the transcript with the room you are sitting in.
+    #
+    # It also buys real-time headroom, because the measured real-time factor is
+    # a dual-track figure: dropping one track roughly halves the model's work.
+    # Deliberately NOT persisted, unlike the settings either side of it.
+    #
+    # Pausing is something you do during a meeting, not a preference. Carrying
+    # it across a restart means launching into a session that looks like it is
+    # recording you and is not -- which is precisely the failure this whole
+    # area exists to remove, rebuilt in a nicer shape. Every launch starts
+    # listening.
+    mic_paused_var = ctk.BooleanVar(value=False)
+    AudioConfig.set_mic_paused(False)
+
+    def toggle_mic_paused():
+        paused = mic_paused_var.get()
+        AudioConfig.set_mic_paused(paused)
+        print(f"[INFO] Microphone track {'paused' if paused else 'resumed'}")
+
+    mic_pause_checkbox = ctk.CTkCheckBox(
+        controls_frame,
+        text="Pause Mic",
+        variable=mic_paused_var,
+        command=toggle_mic_paused,
+        width=95,
+        height=button_height,
+        checkbox_width=16,
+        checkbox_height=16,
+    )
+    mic_pause_checkbox.pack(side="left", padx=(0, 5))
+
     # How many people are on the call. Voice embeddings drift with volume,
     # codec and network conditions, so left to itself the clustering splits
     # one person into several -- a real call produced 12 speakers, exactly the
@@ -863,6 +899,48 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         "pause_dropdown": pause_dropdown,
     }
 
+# How often to re-check that the microphone track is on the right device.
+# Long enough to be free, short enough that a headset connected mid-meeting is
+# picked up within a sentence or two.
+MIC_DEVICE_POLL_SECONDS = 5.0
+
+
+def _start_mic_device_tracking(backend, recorder, mic_queue):
+    """
+    Keep the microphone track pointed at the device actually in use.
+
+    The device is chosen once at launch and its PortAudio *index* is then held
+    for the life of the stream -- but those indices are renumbered whenever the
+    device list changes. A Bluetooth headset handing its microphone to a phone
+    is enough to do it, and the result is a stream that stays open, keeps
+    calling back, and is no longer connected to the microphone anyone is
+    talking into. It looks exactly like recording.
+
+    So this re-resolves the binding rather than watching for silence. Silence
+    is not evidence: a hardware mute and a lost device deliver the same
+    zeroes, and a meeting spent listening delivers nearly the same. Device
+    identity is a question with an answer.
+    """
+    if not hasattr(backend, "follow_default_mic"):
+        return          # Windows: WASAPI keeps its own device handle
+
+    state = {"recorder": recorder}
+
+    def poll():
+        while True:
+            time.sleep(MIC_DEVICE_POLL_SECONDS)
+            try:
+                state["recorder"] = backend.follow_default_mic(
+                    state["recorder"], mic_queue)
+            except Exception as exc:
+                # Never fatal. Losing the ability to follow the device is bad;
+                # taking the meeting down with it would be worse.
+                print(f"[WARN] microphone device check failed: {exc}")
+
+    threading.Thread(target=poll, daemon=True,
+                     name="mic-device-tracker").start()
+
+
 def main():
     try:
         # 初始化环境配置
@@ -901,8 +979,10 @@ def main():
 
     if user_audio_recorder is None and speaker_audio_recorder is None:
         print("ERROR: No audio input available. Run "
-              "`python scripts/check_audio.py` to diagnose.")
+              "`echoai-helper check-audio` to diagnose.")
         return
+
+    _start_mic_device_tracking(backend, user_audio_recorder, mic_queue)
 
     model = TranscriberModels.get_model('--api' in sys.argv)
 
