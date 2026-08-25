@@ -266,3 +266,46 @@ def test_the_microphone_check_does_not_ask_portaudio():
     body = inspect.getsource(macos.a_microphone_exists)
     assert "coreaudio" in body
     assert "sd." not in body and "query_devices" not in body
+
+
+def test_the_heartbeat_thread_is_started_by_the_app_itself():
+    """
+    It is part of the application, not something attached from outside.
+
+    Worth pinning explicitly: during development the recovery was watched
+    through an external `tail -f` on the log, and it would be easy to mistake
+    that scaffolding for the mechanism. The thread runs inside the app process
+    and starts with it; nothing external is required for recovery to happen.
+    """
+    import threading
+    from src import app
+
+    class FakeBackend:
+        def restart_capture(self, recorders, queues):
+            return recorders
+
+    before = {t.name for t in threading.enumerate()}
+    app._start_mic_heartbeat(FakeBackend(), {"You": None}, {"You": None})
+    started = {t.name for t in threading.enumerate()} - before
+
+    assert "mic-heartbeat" in started, "the app must start the heartbeat itself"
+    app._shutting_down.set()          # let it exit
+    for t in threading.enumerate():
+        if t.name == "mic-heartbeat":
+            t.join(timeout=3)
+            assert not t.is_alive(), "it must stop when shutdown is signalled"
+    app._shutting_down.clear()
+
+
+def test_startup_wires_the_heartbeat_to_both_tracks():
+    """
+    Recovery restarts PortAudio, which invalidates every stream -- so the
+    heartbeat needs handles to the far-end track too, not just the microphone.
+    A version wired to the microphone alone would recover it and leave the
+    meeting recording dead.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    call = body.split("_start_mic_heartbeat(", 1)[1][:300]
+    assert '"You"' in call and '"Speaker"' in call

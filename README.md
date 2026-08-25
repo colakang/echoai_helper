@@ -42,6 +42,8 @@ language model to clean up the finished transcript.
   the surrounding conversation, through an API key or through a coding-agent CLI
   on a subscription you already pay for
 - **Markdown and JSON export** — Markdown to read, JSON as a complete record
+- **Noise kept out of the transcript** — room noise that reaches the model comes
+  back as a bare "."; 169 of 1312 lines in one real meeting, now dropped
 - **Pause your own track** — muting yourself in the meeting app does not reach
   this one, and pausing roughly halves the model's work
 - **Recovers a lost microphone** — a Bluetooth headset that drops out is
@@ -128,8 +130,9 @@ transcript exported afterwards — not a smoke test. The longest was 84 minutes
 and 1311 lines.
 
 The Mac mini has no built-in microphone, so the microphone track has only been
-exercised through a Bluetooth headset and a wired input. That is also where the
-[Bluetooth limitation](#-known-limitations) below was found.
+exercised through a Bluetooth headset and a wired input. Disconnecting and
+reconnecting that headset mid-recording is tested, because that is how the
+microphone was found to die silently in the first place.
 
 If you run it somewhere not on this list, an issue saying so — working or
 not — is genuinely useful.
@@ -153,7 +156,8 @@ ships tkinter, so there is no separate Tk step.
 
 1. Open the app. If audio routing is not in place, it offers to finish it.
 2. Pick a mode, and set the number of people if you know it.
-3. Hold your meeting. Nothing needs touching.
+3. Hold your meeting. Nothing needs touching — though **Pause Mic** is there for
+   the stretches you are muted anyway, and it roughly halves the model's work.
 4. **Export** — one dialog covers format, cleanup, which model to clean with,
    and merging over-split speakers.
 
@@ -264,8 +268,9 @@ prints, so this works after the fact.
 git clone https://github.com/colakang/echoai_helper.git
 cd echoai_helper
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r requirements-macos.txt   # or requirements.txt
+uv pip install --python .venv/bin/python -e .
 .venv/bin/python -m pytest tests/ -q
+.venv/bin/python main.py            # run from the checkout
 ```
 
 [`docs/macos-audio-setup.md`](docs/macos-audio-setup.md) covers the audio
