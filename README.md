@@ -1,11 +1,18 @@
-# 🎙️ EchoAI Helper - Your Real-time Conversation Assistant
+# 🎙️ EchoAI Helper
 
 [![GitHub Stars](https://img.shields.io/github/stars/colakang/echoai_helper?style=social)](https://github.com/colakang/echoai_helper/stargazers)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python Version](https://img.shields.io/badge/python-≥3.8-blue.svg)](https://python.org)
-[![OpenAI](https://img.shields.io/badge/OpenAI-API-green.svg)](https://openai.com)
+[![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://python.org)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-lightgrey.svg)](#-install)
+[![Windows](https://img.shields.io/badge/Windows-10%2B-lightgrey.svg)](#windows)
 
-EchoAI Helper is a powerful real-time conversation assistant that provides instant transcription and intelligent responses. It captures both microphone input and speaker output, making it perfect for meetings, interviews, or any scenario where you need real-time conversation analysis.
+Real-time meeting transcription and interview assistance, running on your own
+machine. It records both sides of a conversation — your microphone and whatever
+the meeting app is playing — transcribes them as they happen, labels who is
+speaking, and exports readable notes.
+
+Speech recognition is local. Audio never leaves the machine unless you ask a
+language model to clean up the finished transcript.
 
 <p>
 <a href="https://www.producthunt.com/posts/echoai-interview-copilot?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-echoai&#0045;interview&#0045;copilot" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=601490&theme=light" alt="EchoAI&#0032;Interview&#0032;Copilot&#0032; - Real&#0045;time&#0032;conversation&#0032;with&#0032;LLM&#0032;responses | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
@@ -15,193 +22,241 @@ EchoAI Helper is a powerful real-time conversation assistant that provides insta
 <img width="800" alt="EchoAI Helper Interface" src="https://github.com/colakang/echoai_helper/raw/main/resources/images/ui.png">
 </p>
 
-## ✨ Features
+---
 
-- **Local ASR Support** - CPU-based speech recognition without cloud dependency
-- **Flexible ASR Options** 
-  - Local ASR: FunASR for offline, privacy-focused transcription
-  - Cloud ASR: Optional OpenAI Whisper API integration for enhanced accuracy
-- **Real-time Transcription** - Simultaneous transcription of both microphone input and speaker output
-- **Intelligent Response Generation** - Contextually aware responses powered by OpenAI GPT models
-- **Dual Audio Source Support** - Captures both microphone and system audio simultaneously
-- **Conversation History** - Complete transcript storage and export capabilities
-- **Customizable Response Templates** - Flexible system roles and knowledge base configuration
-- **Buffer Management** - Advanced audio buffering for optimal transcription quality
-- **Export Functionality** - Save conversations in JSON format for future reference
-- **User-friendly Interface** - Clean and intuitive UI built with CustomTkinter
+## ✨ What it does
 
-## 💡 Use Cases
+- **Local speech recognition** — FunASR / SenseVoice, on-device, GPU-accelerated
+  where one is available (Metal on Apple Silicon, CUDA on Windows)
+- **Automatic language detection** — Mandarin, Cantonese, English, Japanese and
+  Korean, switching per utterance, including mid-sentence code-switching
+- **Both sides of the call** — your microphone and the far end, on separate tracks
+- **Speaker labelling** — voices on the far-end track are told apart, with the
+  number of people configurable when you know it
+- **Pause-based segmentation** — sentences are cut where people actually pause,
+  not on a fixed timer, so the model sees whole utterances
+- **Crash-safe recording** — every settled sentence is written to disk as it is
+  produced; a crash costs the last line, not the meeting
+- **LLM cleanup on export** — an optional pass that fixes mis-heard words using
+  the surrounding conversation, through an API key or through a coding-agent CLI
+  on a subscription you already pay for
+- **Markdown and JSON export** — Markdown to read, JSON as a complete record
+- **Live reply suggestions** — for interviews, where a prompt is wanted while the
+  other person is still talking
 
-- Real-time meeting transcription and assistance
-- Interview transcription and analysis
-- Live presentation with AI support
-- Customer service conversation enhancement
+## 💡 Two modes
 
-## 🎬 Demo Video
+| | Meeting notes | Live interview |
+|---|---|---|
+| Text appears | at each pause | as you speak (~0.6s) |
+| Model calls | one per sentence | roughly three times as many |
+| Best for | an accurate record | a prompt you can act on |
+
+Switch in the app; the several settings that differ move together.
+
+## 🎬 Demo
 
 https://github.com/user-attachments/assets/0d627e4a-960b-4628-8bbc-8d892f02cfd1
 
+---
 
-## 🆕 What's NEW
+## ⚡ Install
 
-- Added local CPU-based ASR using FunASR - no cloud service required
-- Added FunASR for improved multilingual support
-- Enhanced response generation with context awareness
-- Introduced customizable templates system
-- Added conversation export functionality
-- Improved audio buffer management
-- Enhanced UI responsiveness
-
-## 📝 TODO
-
-We're actively working on new features to make EchoAI Helper even better:
-
-### Coming Soon 🚀
-- [ ] Smart sentence completion detection
- - Auto-detect sentence completeness
- - Improve transcription accuracy
- - Optimize response timing
-
-- [ ] Enhanced Software Integration
- - Transparent overlay support
- - Easy attachment to any meeting software
-
-- [ ] Installation & Platform Support
- - [ ] One-click Windows installer
- - [ ] macOS support (Intel)
- - [ ] macOS support (Apple Silicon)
- - [ ] Streamlined setup process
-
-### Future Plans 🔮
-- Cross-platform compatibility optimization
-- Enhanced integration capabilities
-- Performance improvements for various hardware
-
-Want to contribute? Check out our [contribution guidelines](CONTRIBUTING.md)!
-
-## 🔧 Prerequisites
-
-### Required
-- Python ≥ 3.8.0
-- FFmpeg
-- Windows OS (Other platforms not fully tested)
-
-### Accounts & API Keys
-- OpenAI API key (paid account required)
-
-## ⚡ Quick Start
+### macOS
 
 ```bash
-# Create conda environment
-conda create -n echoai python=3.10.13
-conda activate echoai
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment variables
-cp .env.example .env
-# Edit .env file and add your OpenAI API key
+uv tool install echoai-helper     # uv brings its own Python 3.12
+echoai-helper setup               # audio routing — one password prompt
+echoai-helper install-launcher    # adds an icon to Launchpad
 ```
 
-## 📦 Detailed Installation
+Launch from Launchpad, or run `echoai-helper`.
 
-### 1. Clone the repository
+`setup` installs a virtual audio device and builds the Multi-Output that lets
+you hear a meeting while it is being recorded. macOS asks for a password once,
+because that installs an audio driver — nothing else needs a privilege, and
+Audio MIDI Setup is not involved.
+
+The app takes the audio output while it runs and gives it back silently when it
+quits, including after a crash. `echoai-helper setup --restore` does it by hand;
+`--status` shows what routing is in place.
+
+<details>
+<summary>Prefer Homebrew?</summary>
+
+A formula is in [`packaging/`](packaging/echoai-helper.rb) for a tap. Homebrew
+can declare the virtual audio device as a dependency, which removes the one step
+that needs a password.
+</details>
+
+### Windows
+
+```powershell
+uv tool install echoai-helper
+echoai-helper
+```
+
+No audio setup step: Windows exposes WASAPI loopback directly, so the far end of
+a call is capturable without a virtual device. The macOS-only commands (`setup`,
+`install-launcher`) report that there is nothing to do. See
+[known limitations](#-known-limitations) — this path has not been re-tested since
+the segmentation rework.
+
+### First run
+
+Speech models (~1.5GB) download on first launch. Nothing else is needed.
+
+<details>
+<summary>Why Python 3.12 specifically</summary>
+
+Not caution. The vendored `src/custom_speech_recognition` imports `aifc` and
+`audioop` at module level, and **both were removed from the standard library in
+Python 3.13**. `uv` installs a suitable interpreter itself, and its 3.12 build
+ships tkinter, so there is no separate Tk step.
+</details>
+
+---
+
+## 🎯 Using it
+
+1. Open the app. If audio routing is not in place, it offers to finish it.
+2. Pick a mode, and set the number of people if you know it.
+3. Hold your meeting. Nothing needs touching.
+4. **Export** — one dialog covers format, cleanup, which model to clean with,
+   and merging over-split speakers.
+
+Cleanup runs in the background with a progress bar and an estimate, and can be
+stopped: whatever finished is kept.
+
+### Choosing a cleanup backend
+
+| | Cost | Speed (measured) |
+|---|---|---|
+| **API** (`conf.yaml`) | per token | 5–8s per batch of lines |
+| **Claude CLI** | included in a subscription | 20–50s per batch |
+
+Both are offered at export, and the dialog turns the per-batch figure into an
+estimate for the transcript in hand. The live reply suggestions always use the
+configured API — a CLI takes seconds per answer, which is too late to be useful
+while someone is still talking.
+
+### Past recordings
+
+```bash
+echoai-helper sessions              # list them
+echoai-helper sessions --export 0   # export one again
+echoai-helper sessions --delete 0
+```
+
+Re-exporting is the point: a different format, another pass of cleanup, a
+different number of speakers, without re-recording anything. An unfinished
+session from the last 12 hours is offered on the next launch.
+
+---
+
+## ⚙️ Configuration
+
+`conf.yaml` holds the model settings; everything else is in the app.
+
+```yaml
+FunASR:
+  model_name: "iic/SenseVoiceSmall"
+  device: "auto"        # cuda, then mps, then cpu
+  language: "auto"      # zh, en, yue, ja, ko
+
+LLM:
+  provider: "openai"    # openai | litellm | cli
+```
+
+Both `auto` values are load-bearing rather than lazy defaults:
+
+- **`device: "auto"`** — measured on an M4, dual-track real-time factor is 2.04
+  on cpu (falling behind twice over) against 0.35 on Metal. Landing on cpu by
+  accident means transcription that cannot keep up. Naming a device explicitly is
+  also wrong on every machine that does not have it, and this file travels.
+- **`language: "auto"`** — pinning a language does not bias the model, it forces
+  the syllables onto words of that language. A Cantonese call transcribed with
+  `language: "en"` comes back as fluent nonsense.
+
+An OpenAI key goes in `.env` (see `.env.example`), or in a file called `.llm`
+holding nothing else. Both are gitignored.
+
+---
+
+## 🔍 Troubleshooting
+
+```bash
+echoai-helper check-audio           # what is being captured, and from where
+echoai-helper setup --status        # what routing is in place
+```
+
+**Nothing from the far end (macOS).** The meeting app has its own audio settings
+and remembers them. Set its speaker to `EchoAI Meeting`.
+
+**Nothing from the microphone over Bluetooth.** A Bluetooth headset can only send
+its microphone to one device. If it is on a phone call, the Mac gets silence —
+and the stream does not recover on its own; restart the app. A USB microphone
+avoids this entirely.
+
+**More speakers than people.** Voice prints drift with volume and connection
+quality, so one person can end up split across several labels. Set the number of
+people before the meeting, or merge them at export — the export carries the voice
+prints, so this works after the fact.
+
+---
+
+## 🛠️ Development
+
 ```bash
 git clone https://github.com/colakang/echoai_helper.git
 cd echoai_helper
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r requirements-macos.txt   # or requirements.txt
+.venv/bin/python -m pytest tests/ -q
 ```
 
-### 2. Set up Python environment
-```bash
-# Using conda (recommended)
-conda create -n echoai python=3.10.13
-conda activate echoai
+[`docs/macos-audio-setup.md`](docs/macos-audio-setup.md) covers the audio
+routing, what has been measured, and where the sharp edges are.
 
-# Install dependencies
-pip install -r requirements.txt
-pip install -U funasr
-pip install torch
-pip install -U modelscope huggingface_hub
-pip install "numpy<2.0"
-conda install pytorch torchvision torchaudio cpuonly -c pytorch
-```
+---
 
-### 3. Install FFmpeg (Windows)
-Using Chocolatey (Run PowerShell as Administrator):
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-choco install ffmpeg
-```
+## 📝 Known limitations
 
-### 4. Configure Environment Variables
-1. Copy the example environment file:
-```bash
-cp .env.example .env
-```
-
-2. Edit the `.env` file and configure your settings:
-```plaintext
-# OpenAI Configuration
-OPENAI_API_KEY=your-api-key-here
-```
-
-### 5. Verify Installation
-```bash
-# Start the application
-python main.py
-
-```
-
-> 📝 **Note:** Make sure to keep your `.env` file secure and never commit it to version control. The `.gitignore` file is already configured to exclude it.
-
-## 🎯 Usage
-
-1. Start the application:
-```bash
-python main.py
-```
-
-2. The interface will show two main sections:
-   - Left panel: Real-time transcription
-   - Right panel: AI-generated responses
-
-3. Customize settings using the control panel:
-   - Adjust phrase timeout
-   - Configure buffer chunks
-   - Select templates
-   - Export conversations
-   - Manual popup current sentence
+- **A dead microphone stream does not recover.** Seen on a real call: capture
+  stops silently and the app looks like it is still working. Restarting fixes it.
+  This is the most consequential item on the list.
+- **Speaker labelling is tuned against a clean two-party recording** and
+  over-splits on group calls over a lossy connection. Merging at export is the
+  workaround, not the cure.
+- **The Windows capture path is untested** since the segmentation rework. Its
+  detector threshold was lowered to pass silence through, because segmentation
+  now happens on pauses and a recogniser that only reports speech never delivers
+  them — reasoned, not verified. Reports welcome.
+- **macOS audio routing is a shared setting.** Selecting the Multi-Output changes
+  the output for every app, and macOS sometimes moves it back after sleep.
+  Checked at every launch.
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+Pull requests welcome; for anything substantial, open an issue first. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 🙌 Credits
+
+- [FunASR](https://github.com/modelscope/FunASR) — speech recognition and speaker
+  embeddings
+- [silero-vad](https://github.com/snakers4/silero-vad) — voice activity detection
+- [WhisperLiveKit](https://github.com/QuentinFuxa/WhisperLiveKit) — the
+  LocalAgreement idea behind stable partial transcripts
+- [BlackHole](https://existential.audio/blackhole/) — virtual audio device on macOS
+- [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) — interface
+- [Ecoute](https://github.com/SevaSk/ecoute) — the original inspiration
+- [@zixing0131](https://github.com/zixing0131) — core audio processing
 
 ## 📞 Contact
 
-- Website: [EchoAI](https://www.echo365.ai)
-- Issues: [GitHub Issues](https://github.com/colakang/echoai_helper/issues)
-
-Project Link: [https://github.com/colakang/echoai_helper](https://github.com/colakang/echoai_helper)
-
-## 🙌 Credits & Inspiration
-
-This project wouldn't be possible without these amazing projects and tools:
-
-### 🛠️ Core Technologies
-- [FunASR](https://github.com/modelscope/FunASR) - For state-of-the-art speech recognition
-- [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) - For modern UI components
-- [FFmpeg](https://ffmpeg.org/) - For audio processing capabilities
-
-### 🌟 Related Projects
-We've drawn inspiration and learned from these excellent projects:
-
-- [Ecoute](https://github.com/SevaSk/ecoute)
-
-### 🤝 Special Thanks
-- [@zixing0131](https://github.com/zixing0131) - For implementing core audio processing components
+[echo365.ai](https://www.echo365.ai) · [Issues](https://github.com/colakang/echoai_helper/issues)
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).

@@ -1,11 +1,13 @@
 {
-    "phrase_timeout": 6.2,
-    "buffer_chunks": 1,
-    "update_interval": 1.0,
+    "profile": "meeting",
+    "min_silence_ms": 700,
+    "diarization": false,
+    "speaker_count": 0,
+    "record_only_mode": true,
     "system_role": "inbound_cs",
     "case_detail": "none",
     "knowledge": "none",
     "window_opacity": 1.0,
     "window_topmost": false,
-    "record_only_mode": false
+    "setup_declined": false
 }

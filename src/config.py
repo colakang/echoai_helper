@@ -48,6 +48,26 @@ class PathConfig:
         """获取模型文件目录"""
         return os.path.join(PathConfig.get_resource_path(), 'models')
 
+    @staticmethod
+    def get_user_config_path():
+        """
+        Where this user's own settings live.
+
+        Deliberately outside the repo. resources/config/settings.json is
+        tracked in git but was being rewritten on every change, so one
+        person's window opacity and mode showed up as a diff, and committing
+        it pushed their preferences to everyone. That file is now the shipped
+        default, read once and never written.
+        """
+        if sys.platform == "darwin":
+            base = os.path.expanduser("~/Library/Application Support")
+        elif sys.platform == "win32":
+            base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        else:
+            base = os.environ.get(
+                "XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+        return os.path.join(base, "EchoAI Helper")
+
 class EnvConfig:
     """环境配置管理类"""
     
@@ -59,30 +79,65 @@ class EnvConfig:
             cls._instance = super().__new__(cls)
         return cls._instance
     
+    # Files holding nothing but the API key itself, checked before .env.
+    # Keeping the secret in one place beats copying it into a second file;
+    # every one of these must stay in .gitignore.
+    KEY_FILES = ('.llm', '.openai_key')
+
+    @classmethod
+    def _load_bare_key_file(cls, root: str) -> bool:
+        """Read a file whose entire contents are the API key. Returns True on success."""
+        for name in cls.KEY_FILES:
+            path = os.path.join(root, name)
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    key = f.read().strip()
+            except Exception as e:
+                print(f"Error reading {path}: {e}")
+                continue
+            if not key:
+                continue
+            # Tolerate `OPENAI_API_KEY=sk-...` as well as a bare `sk-...`.
+            if '=' in key.split('\n')[0]:
+                key = key.split('\n')[0].split('=', 1)[1].strip().strip('"\'')
+            os.environ['OPENAI_API_KEY'] = key
+            print(f"[INFO] Loaded OpenAI key from {name}")
+            return True
+        return False
+
     @classmethod
     def initialize(cls) -> None:
         """初始化环境配置"""
         if cls._initialized:
             return
-        
+
+        root = PathConfig.get_project_root()
+
+        # 优先读裸密钥文件（.llm 等），其次 .env
+        if cls._load_bare_key_file(root):
+            cls._initialized = True
+            return
+
         # 获取.env文件路径
-        env_path = os.path.join(PathConfig.get_project_root(), '.env')
-        
+        env_path = os.path.join(root, '.env')
+
         # 如果.env文件不存在，创建它
         if not os.path.exists(env_path):
             cls.create_env_template(env_path)
             print(f"Please set your OpenAI API key in {env_path}")
             return
-        
+
         # 加载.env文件
         load_dotenv(env_path)
-        
+
         # 验证API密钥
         if not os.getenv('OPENAI_API_KEY'):
             print(f"OPENAI_API_KEY not found in {env_path}")
             print("Please add your OpenAI API key to the .env file")
             return
-        
+
         cls._initialized = True
     
     @classmethod
@@ -142,6 +197,70 @@ class AudioConfig:
     _instance = None
     _phrase_timeout = 5.2  # 默认值
     _buffer_chunks = 1     # 默认值
+
+    # Whether to run the fast lane: re-transcribe the utterance in progress on
+    # every chunk so text appears while someone is still speaking.
+    #
+    # Off by default, which suits meeting notes -- the primary use case. There
+    # the only thing that matters is the accurate pass at each pause, and
+    # skipping partials removes roughly two thirds of all model calls.
+    #
+    # On for live interview, where seeing words ~0.6s after they are spoken is
+    # the entire point and paying for it is the trade.
+    _live_partials = False
+
+    @classmethod
+    def get_live_partials(cls):
+        return cls._live_partials
+
+    @classmethod
+    def set_live_partials(cls, value: bool):
+        cls._live_partials = bool(value)
+
+    # Which named profile is current. See src/profiles.py.
+    _profile = "meeting"
+
+    @classmethod
+    def get_profile(cls):
+        return cls._profile
+
+    @classmethod
+    def set_profile(cls, key: str):
+        cls._profile = key
+
+    # Label who is speaking on a track that carries several people. Costs one
+    # CAM++ embedding per segment (~293ms on an M4) on top of transcription,
+    # so it is opt-in: pointless for a one-to-one call, close to essential for
+    # a meeting transcript.
+    _diarization = False
+
+    @classmethod
+    def get_diarization(cls):
+        return cls._diarization
+
+    @classmethod
+    def set_diarization(cls, value: bool):
+        cls._diarization = bool(value)
+
+    # How many people are actually in the meeting. 0 means "work it out".
+    #
+    # Worth telling it: voice embeddings drift with volume, codec and network
+    # conditions, so online clustering splits one person into several. A real
+    # WeChat call produced 12 speakers -- exactly the cap -- for a handful of
+    # people. Given the real number, the registry stops inventing new ones and
+    # assigns each utterance to the nearest voice it already knows.
+    _speaker_count = 0
+
+    @classmethod
+    def get_speaker_count(cls):
+        return cls._speaker_count
+
+    @classmethod
+    def set_speaker_count(cls, value):
+        try:
+            cls._speaker_count = max(0, int(value))
+        except (TypeError, ValueError):
+            cls._speaker_count = 0
 
     @classmethod
     def get_buffer_chunks(cls):
