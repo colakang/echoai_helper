@@ -242,6 +242,26 @@ class AudioConfig:
     def set_diarization(cls, value: bool):
         cls._diarization = bool(value)
 
+    # How many people are actually in the meeting. 0 means "work it out".
+    #
+    # Worth telling it: voice embeddings drift with volume, codec and network
+    # conditions, so online clustering splits one person into several. A real
+    # WeChat call produced 12 speakers -- exactly the cap -- for a handful of
+    # people. Given the real number, the registry stops inventing new ones and
+    # assigns each utterance to the nearest voice it already knows.
+    _speaker_count = 0
+
+    @classmethod
+    def get_speaker_count(cls):
+        return cls._speaker_count
+
+    @classmethod
+    def set_speaker_count(cls, value):
+        try:
+            cls._speaker_count = max(0, int(value))
+        except (TypeError, ValueError):
+            cls._speaker_count = 0
+
     @classmethod
     def get_buffer_chunks(cls):
         return cls._buffer_chunks

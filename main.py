@@ -146,6 +146,78 @@ def _offer_restore_on_exit(root):
     root.destroy()
 
 
+def _polish_with_progress(root, conversation_data, backend):
+    """
+    Clean the transcript on a worker thread, behind a progress window.
+
+    It used to run inline on the UI thread. On a real meeting -- 1311 lines,
+    53 batches -- that is 18 to 45 minutes of a frozen window with no
+    progress and no way out, which is indistinguishable from a hang and
+    invites a force-quit that loses the work.
+    """
+    try:
+        from src.polish import polish_transcript, DEFAULT_BATCH_SIZE
+        from src.export_dialog import run_with_progress
+
+        provider = _build_polish_provider(backend)
+        if provider is None:
+            return "\n\nCleanup skipped: no language model available."
+
+        messages = conversation_data["conversation"]["messages"]
+        countable = len([m for m in messages if (m.get("text") or "").strip()])
+        batches = max(1, (countable + DEFAULT_BATCH_SIZE - 1) // DEFAULT_BATCH_SIZE)
+
+        def work(report, cancelled):
+            return polish_transcript(
+                messages, provider,
+                progress=lambda done, total: report(done, total),
+                cancelled=cancelled)
+
+        result = run_with_progress(root, batches, provider.get_model_name(), work)
+        if result is None:
+            return "\n\nCleanup did not run."
+
+        conversation_data["conversation"]["messages"] = result.segments
+        conversation_data.setdefault("metadata", {})["cleanup"] = {
+            "model": provider.get_model_name(),
+            "lines_cleaned": result.polished_count,
+            "batches_failed": result.batches_failed,
+            "stopped_early": result.cancelled,
+        }
+        note = f"\n\nCleanup: {result.summary()}"
+        if result.cancelled:
+            note += "\nStopped early; the rest was left as recorded."
+        return note
+
+    except Exception as e:
+        print(f"Transcript cleanup failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"\n\nCleanup failed ({e}); the transcript was saved unchanged."
+
+
+def _build_polish_provider(backend):
+    """Build the provider for one cleanup run. 'cli' overrides conf.yaml."""
+    import yaml
+    from src.llm import create_llm_provider
+
+    with open(f"{PathConfig.get_project_root()}/conf.yaml", "rb") as f:
+        llm_config = (yaml.safe_load(f) or {}).get("LLM", {})
+
+    if backend == "cli":
+        return create_llm_provider("cli", dict(llm_config.get("cli", {})))
+
+    provider_type = llm_config.get("provider", "openai").lower()
+    if provider_type == "cli":
+        provider_type = "openai"
+    if provider_type == "openai":
+        config = {"api_key": EnvConfig.get_openai_key(),
+                  "model": llm_config.get("openai", {}).get("model", "gpt-4o-mini")}
+    else:
+        config = dict(llm_config.get(provider_type, {}))
+    return create_llm_provider(provider_type, config)
+
+
 def _ask_polish_backend():
     """
     Ask whether to clean the transcript, and on what.
@@ -373,83 +445,60 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
 
     # === Column 2: Action Buttons ===
     def export_responses():
-        """处理导出对话记录的函数"""
+        """Export the conversation, optionally cleaning it up first."""
         try:
             conversation_data = response_manager.export_structured_conversation(
-                transcriber.structured_transcript,
-                reverse_chronological=False
-            )
-            
-            if not conversation_data or not conversation_data["conversation"]["messages"]:
+                transcriber.structured_transcript, reverse_chronological=False)
+
+            messages = (conversation_data.get("conversation", {}) or {}).get(
+                "messages", []) if conversation_data else []
+            if not messages:
                 messagebox.showwarning(
-                    "Export Notice",
-                    "No conversation data available for export."
-                )
+                    "Nothing to export",
+                    "No conversation has been recorded yet.")
                 return
 
+            from src.export_dialog import ExportDialog, run_with_progress
+            from src.llm.cli_provider import CLIProvider
+
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_path = os.path.join(
+                os.path.expanduser("~/Desktop"), f"conversation_{timestamp}.md")
 
-            filepath = filedialog.asksaveasfilename(
-                defaultextension=".md",
-                initialfile=f"conversation_{timestamp}.md",
-                filetypes=[("Markdown (for reading)", "*.md"),
-                           ("JSON (full record)", "*.json"),
-                           ("All files", "*.*")],
-                title="Export Conversation"
-            )
-            
-            if filepath:
-                polish_note = ""
-                backend = _ask_polish_backend()
-                if backend:
-                    polish_note = _polish_before_export(conversation_data, backend)
+            choices = ExportDialog(
+                root, default_path,
+                cli_available=CLIProvider(command="claude").validate_config(),
+                line_count=len([m for m in messages if (m.get("text") or "").strip()]),
+            ).ask()
+            if choices is None:
+                return
 
-                if filepath.lower().endswith(".md"):
-                    # Markdown is read, so it carries the cleaned text only.
-                    # Offer the raw lines for when the transcript is evidence
-                    # rather than notes.
-                    include_original = bool(polish_note) and messagebox.askyesno(
-                        "Include the original wording?",
-                        "Show what the recogniser originally heard beneath each "
-                        "line that was corrected?\n\n"
-                        "Useful when the transcript needs to be checked. Leave "
-                        "this off for ordinary notes -- it roughly doubles the "
-                        "length.")
-                    success = _save_markdown(filepath, conversation_data,
-                                             include_original)
-                else:
-                    success = response_manager.save_structured_conversation(
-                        filepath,
-                        conversation_data
-                    )
+            cleanup_note = ""
+            if choices.polish:
+                cleanup_note = _polish_with_progress(
+                    root, conversation_data, choices.backend)
 
-                if success:
-                    total_messages = len(conversation_data["conversation"]["messages"])
-                    messages_with_responses = sum(
-                        1 for msg in conversation_data["conversation"]["messages"] 
-                        if "response" in msg
-                    )
-                    
-                    messagebox.showinfo(
-                        "Export Successful", 
-                        f"Conversation data has been saved to:\n{filepath}\n\n"
-                        f"Total messages: {total_messages}\n"
-                        f"Messages with responses: {messages_with_responses}"
-                        + polish_note
-                    )
-                else:
-                    messagebox.showerror(
-                        "Export Failed", 
-                        f"Error occurred while saving the file.\n"
-                        f"Please check file permissions and disk space.\n"
-                        f"Target path: {filepath}"
-                    )
+            if choices.is_markdown:
+                saved = _save_markdown(choices.path, conversation_data,
+                                       choices.include_original)
+            else:
+                saved = response_manager.save_structured_conversation(
+                    choices.path, conversation_data)
+
+            if not saved:
+                messagebox.showerror(
+                    "Export failed",
+                    f"Could not write to:\n{choices.path}\n\n"
+                    "Check the folder is writable and has space.")
+                return
+
+            lines = len(conversation_data["conversation"]["messages"])
+            messagebox.showinfo(
+                "Exported",
+                f"{lines} lines saved to:\n{choices.path}" + cleanup_note)
+
         except Exception as e:
-            messagebox.showerror(
-                "Export Error", 
-                f"An error occurred during export:\n{str(e)}\n\n"
-                "Please contact technical support."
-            )
+            messagebox.showerror("Export error", f"{e}")
             print(f"Export error: {e}")
             import traceback
             traceback.print_exc()
@@ -626,6 +675,27 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         checkbox_height=16,
     )
     diarize_checkbox.pack(side="left", padx=(0, 5))
+
+    # How many people are on the call. Voice embeddings drift with volume,
+    # codec and network conditions, so left to itself the clustering splits
+    # one person into several -- a real call produced 12 speakers, exactly the
+    # cap, for a handful of people. Given the real number it stops inventing.
+    people_values = ["auto"] + [str(i) for i in range(2, 13)]
+    saved_people = settings_manager.get_setting("speaker_count")
+    people_var = ctk.StringVar(
+        value=str(saved_people) if saved_people else "auto")
+
+    def on_people_change(value):
+        count = 0 if value == "auto" else int(value)
+        AudioConfig.set_speaker_count(count)
+        settings_manager.update_setting("speaker_count", count)
+
+    people_menu = ctk.CTkOptionMenu(
+        controls_frame, variable=people_var, values=people_values,
+        width=76, height=button_height, command=on_people_change)
+    people_menu.pack(side="left", padx=(0, 5))
+    ctk.CTkLabel(controls_frame, text="people", font=("Arial", 11),
+                 text_color="#8a8a8a").pack(side="left", padx=(0, 5))
 
     # Topmost Button
     topmost_var = tk.BooleanVar(value=settings_manager.get_setting("window_topmost"))
@@ -806,6 +876,7 @@ def main():
     
     SystemConfig.set_record_only_mode(settings_manager.get_setting("record_only_mode"))
     AudioConfig.set_diarization(settings_manager.get_setting("diarization"))
+    AudioConfig.set_speaker_count(settings_manager.get_setting("speaker_count"))
     if AudioConfig.get_diarization():
         # Off the main thread: loading it costs ~20s the first time, and the
         # UI should come up regardless. Segments transcribe unlabelled until

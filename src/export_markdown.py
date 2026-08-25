@@ -146,8 +146,20 @@ def _default_title(metadata: Dict) -> str:
     return "Conversation"
 
 
+def _speaker_sort_key(label: str):
+    """Numeric where there is a number, so Speaker 2 precedes Speaker 10."""
+    digits = "".join(c for c in label if c.isdigit())
+    return (0 if digits else 1, int(digits) if digits else 0, label)
+
+
 def _front_matter(metadata: Dict, messages: List[dict]) -> List[str]:
-    speakers = sorted({_speaker_of(m) for m in messages if _text_of(m)})
+    # Collapse the uncertain variants. "Speaker 3" and "Speaker 3 (uncertain)"
+    # are one person; listing both turned a summary of a real meeting into 24
+    # entries for a handful of people, sorted 1, 10, 11, 12, 2 into the
+    # bargain.
+    names = {_speaker_of(m).replace(" (uncertain)", "")
+             for m in messages if _text_of(m)}
+    speakers = sorted(names, key=_speaker_sort_key)
     lines = [
         f"- **Lines:** {len([m for m in messages if _text_of(m)])}",
         f"- **Speakers:** {', '.join(speakers) if speakers else '—'}",

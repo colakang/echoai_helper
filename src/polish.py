@@ -69,6 +69,7 @@ class PolishResult:
     polished_count: int = 0
     batches_attempted: int = 0
     batches_failed: int = 0
+    cancelled: bool = False
     errors: List[str] = field(default_factory=list)
 
     @property
@@ -77,6 +78,8 @@ class PolishResult:
 
     def summary(self) -> str:
         parts = [f"{self.polished_count}/{len(self.segments)} lines cleaned"]
+        if self.cancelled:
+            parts.append("stopped early")
         if self.batches_failed:
             parts.append(f"{self.batches_failed}/{self.batches_attempted} "
                          f"batches failed (originals kept)")
@@ -86,8 +89,8 @@ class PolishResult:
 def polish_transcript(messages: List[dict], provider,
                       batch_size: int = DEFAULT_BATCH_SIZE,
                       overlap: int = DEFAULT_OVERLAP,
-                      progress: Optional[Callable[[int, int], None]] = None
-                      ) -> PolishResult:
+                      progress: Optional[Callable[[int, int], None]] = None,
+                      cancelled=None) -> PolishResult:
     """
     Add a `polished` field to each message that has text.
 
@@ -112,6 +115,13 @@ def polish_transcript(messages: List[dict], provider,
                for i in range(0, len(indexed), batch_size)]
 
     for batch_number, batch in enumerate(batches):
+        # Checked between batches, never inside one: stopping mid-request
+        # would waste work already paid for, and a batch is only ~20-50s.
+        # Everything cleaned so far is kept.
+        if cancelled is not None and cancelled.is_set():
+            result.cancelled = True
+            break
+
         result.batches_attempted += 1
         if progress:
             progress(batch_number, len(batches))

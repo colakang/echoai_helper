@@ -246,7 +246,15 @@ class AudioTranscriber:
         if who_spoke.lower() != "speaker":
             return None
 
-        config = self._registries[who_spoke].config
+        registry = self._registries[who_spoke]
+        # An expected headcount, when the user supplies one, caps the
+        # registry: past it, every utterance goes to the nearest voice
+        # already known rather than inventing another.
+        expected = AudioConfig.get_speaker_count()
+        if expected and registry.config.max_speakers != expected:
+            registry.config.max_speakers = expected
+
+        config = registry.config
         if segment.duration_s < config.min_duration_s:
             # Too short for a reliable embedding, the same way it is too short
             # for reliable language detection.

@@ -28,6 +28,8 @@ class SettingsManager:
         "window_topmost": False,
         "record_only_mode": False,  # 添加新设置项
         "diarization": False,
+        # 0 = work it out; otherwise the number of people on the call.
+        "speaker_count": 0,
         # Remembered so the first-run setup asks once, not every launch.
         "setup_declined": False
     }
