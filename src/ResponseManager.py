@@ -122,7 +122,9 @@ class ResponseManager:
             traceback.print_exc()  # 打印详细错误信息
             return False
 
-    def export_structured_conversation(self, structured_transcript: dict, reverse_chronological: bool = False) -> dict:
+    def export_structured_conversation(self, structured_transcript: dict,
+                                       reverse_chronological: bool = False,
+                                       speaker_embeddings: dict = None) -> dict:
         """
         基于structured_transcript导出完整的对话数据，使用本地时区
         """
@@ -218,6 +220,13 @@ class ResponseManager:
                         "response_id": response_id,
                         "index": idx
                     }
+                    embedding = (speaker_embeddings or {}).get(response_id)
+                    if embedding is not None:
+                        # float16 halves the size at no cost to clustering:
+                        # cosine similarities agree to about 1e-3, far below
+                        # any threshold that matters.
+                        message["embedding"] = [round(float(v), 4)
+                                                for v in embedding]
                     
                     # 只为有效的response_id添加响应
                     if response_id and response_id in responses_dict:

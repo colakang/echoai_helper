@@ -448,7 +448,8 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         """Export the conversation, optionally cleaning it up first."""
         try:
             conversation_data = response_manager.export_structured_conversation(
-                transcriber.structured_transcript, reverse_chronological=False)
+                transcriber.structured_transcript, reverse_chronological=False,
+                speaker_embeddings=getattr(transcriber, "speaker_embeddings", None))
 
             messages = (conversation_data.get("conversation", {}) or {}).get(
                 "messages", []) if conversation_data else []
@@ -465,15 +466,28 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
             default_path = os.path.join(
                 os.path.expanduser("~/Desktop"), f"conversation_{timestamp}.md")
 
+            import re as _re
+            found = {_re.match(r"S(\d+)", m.get("speaker") or "")
+                     for m in messages if m.get("speaker")}
+            found = {m.group(1) for m in found if m}
+
             choices = ExportDialog(
                 root, default_path,
                 cli_available=CLIProvider(command="claude").validate_config(),
                 line_count=len([m for m in messages if (m.get("text") or "").strip()]),
+                speakers_found=len(found),
+                can_merge=any(m.get("embedding") for m in messages),
             ).ask()
             if choices is None:
                 return
 
             cleanup_note = ""
+            if choices.merge_speakers_to:
+                from src.polish import merge_speakers
+                changed = merge_speakers(messages, choices.merge_speakers_to)
+                cleanup_note += (f"\n\nRe-grouped voices into "
+                                 f"{choices.merge_speakers_to} speakers "
+                                 f"({changed} lines relabelled).")
             if choices.polish:
                 cleanup_note = _polish_with_progress(
                     root, conversation_data, choices.backend)

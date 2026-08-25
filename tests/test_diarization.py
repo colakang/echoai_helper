@@ -193,3 +193,90 @@ def test_degenerate_embedding_is_not_a_speaker():
     result = registry.assign(np.zeros(DIMS))
     assert result.speaker is None
     assert registry.speakers == []
+
+
+# --------------------------------------------------------------------------
+# Offline re-clustering
+# --------------------------------------------------------------------------
+#
+# Online clustering has to commit to a label as each utterance arrives, with
+# no view of what follows, so it over-splits. A real call produced twelve
+# speakers of which three carried 93% of the talking; the other nine were 47
+# segments of drift. Given the whole recording and the real headcount, that is
+# recoverable -- but only from the embeddings, which is why the export now
+# carries them.
+
+from src.asr.diarization import recluster  # noqa: E402
+
+
+def test_reclustering_recovers_the_real_speakers():
+    voices = [voice(s) for s in (1, 2, 3)]
+    embeddings, truth = [], []
+    for turn in range(30):
+        who = turn % 3
+        embeddings.append(near(voices[who], 0.85, seed=200 + turn))
+        truth.append(who)
+
+    assignment = recluster(embeddings, target=3)
+
+    grouping = {}
+    for actual, cluster in zip(truth, assignment):
+        grouping.setdefault(actual, set()).add(cluster)
+    for actual, clusters in grouping.items():
+        assert len(clusters) == 1, f"speaker {actual} was split across {clusters}"
+    assert len(set(assignment)) == 3
+
+
+def test_clusters_are_numbered_by_how_much_each_speaks():
+    """Speaker 1 should be whoever talked most -- stable across runs, and the
+    order a reader expects."""
+    loud, quiet = voice(1), voice(2)
+    embeddings = [near(loud, 0.9, seed=i) for i in range(10)]
+    embeddings += [near(quiet, 0.9, seed=100 + i) for i in range(3)]
+
+    assignment = recluster(embeddings, target=2)
+    assert assignment[0] == 1
+    assert assignment[-1] == 2
+
+
+def test_asking_for_more_speakers_than_utterances_is_safe():
+    assignment = recluster([voice(1), voice(2)], target=10)
+    assert len(assignment) == 2
+
+
+def test_reclustering_an_empty_transcript_is_safe():
+    assert recluster([], target=3) == []
+
+
+def test_degenerate_embeddings_do_not_crash_it():
+    assignment = recluster([np.zeros(DIMS), voice(1), voice(2)], target=2)
+    assert len(assignment) == 3
+
+
+def test_merge_needs_embeddings_to_work_on():
+    """Labels alone say nothing about whose voice it was. Without embeddings
+    this does nothing rather than guessing -- which is exactly why the first
+    real meeting's labels could not be repaired."""
+    from src.polish import merge_speakers
+
+    messages = [{"text": "S1: hello", "speaker": "S1"},
+                {"text": "S7: hello", "speaker": "S7"}]
+    assert merge_speakers(messages, 1) == 0
+    assert messages[1]["speaker"] == "S7"
+
+
+def test_merge_relabels_text_and_speaker_together():
+    from src.polish import merge_speakers
+
+    base = voice(1)
+    messages = [
+        {"text": "S3: first", "speaker": "S3",
+         "embedding": list(near(base, 0.95, seed=1))},
+        {"text": "S9: second", "speaker": "S9",
+         "embedding": list(near(base, 0.95, seed=2))},
+    ]
+    merge_speakers(messages, 1)
+
+    assert messages[0]["speaker"] == messages[1]["speaker"] == "S1"
+    assert messages[0]["text"] == "S1: first"
+    assert messages[1]["text"] == "S1: second"

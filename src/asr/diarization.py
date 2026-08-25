@@ -150,6 +150,62 @@ class SpeakerRegistry:
         self._next_id = 1
 
 
+def recluster(embeddings: List[np.ndarray], target: int,
+              labels: Optional[List[int]] = None) -> List[int]:
+    """
+    Re-assign voices offline, knowing how many people there were.
+
+    Online clustering has to decide on each utterance as it arrives, with no
+    view of what comes later, so it over-splits: a real call produced twelve
+    speakers, of which three carried 93% of the talking and the other nine
+    were fragments that had drifted. Given the whole recording and the true
+    headcount, that is recoverable.
+
+    Agglomerative, average-linkage on cosine similarity: repeatedly merge the
+    two closest clusters until `target` remain. Average linkage rather than
+    nearest-neighbour because a single ambiguous segment sitting between two
+    people should not chain them together.
+
+    Returns a cluster index per embedding, ordered by how much each cluster
+    speaks, so speaker 1 is the one who talked most.
+    """
+    vectors = [_normalise(e) for e in embeddings]
+    usable = [i for i, v in enumerate(vectors) if v is not None]
+    if not usable:
+        return [0] * len(embeddings)
+
+    target = max(1, min(target, len(usable)))
+    clusters = {i: [i] for i in usable}
+    centroids = {i: vectors[i] for i in usable}
+
+    while len(clusters) > target:
+        best = None
+        keys = list(clusters)
+        for a_index, a in enumerate(keys):
+            for b in keys[a_index + 1:]:
+                similarity = float(centroids[a] @ centroids[b])
+                if best is None or similarity > best[0]:
+                    best = (similarity, a, b)
+        if best is None:
+            break
+
+        _, a, b = best
+        clusters[a].extend(clusters.pop(b))
+        members = np.stack([vectors[i] for i in clusters[a]])
+        merged = members.mean(axis=0)
+        centroids[a] = merged / np.linalg.norm(merged)
+        centroids.pop(b)
+
+    # Largest first, so "Speaker 1" is whoever spoke most -- stable across
+    # runs and the order a reader expects.
+    ordered = sorted(clusters.values(), key=len, reverse=True)
+    assignment = [0] * len(embeddings)
+    for rank, members in enumerate(ordered, start=1):
+        for index in members:
+            assignment[index] = rank
+    return assignment
+
+
 def _normalise(embedding) -> Optional[np.ndarray]:
     """Torch tensor or array -> unit-length float64 vector."""
     if embedding is None:

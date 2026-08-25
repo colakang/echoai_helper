@@ -152,6 +152,42 @@ def polish_transcript(messages: List[dict], provider,
     return result
 
 
+def merge_speakers(messages: List[dict], target: int) -> int:
+    """
+    Re-label the transcript for a known number of speakers.
+
+    Online clustering commits to a label as each utterance arrives, with no
+    view of what follows, so it over-splits. Offline, with the whole
+    recording and the real headcount, the fragments can be put back.
+
+    Needs the embeddings the export carries. Without them there is nothing to
+    cluster on -- the label alone says nothing about whose voice it was --
+    and this does nothing rather than guessing.
+
+    Returns how many labels changed.
+    """
+    from src.asr.diarization import recluster
+
+    indexed = [(i, m) for i, m in enumerate(messages) if m.get("embedding")]
+    if len(indexed) < 2 or target < 1:
+        return 0
+
+    assignment = recluster([m["embedding"] for _, m in indexed], target)
+
+    changed = 0
+    for (index, message), cluster in zip(indexed, assignment):
+        label = f"S{cluster}"
+        if message.get("speaker") != label:
+            message["speaker"] = label
+            changed += 1
+        # The label also lives in the text, prefixed at capture time.
+        text = message.get("text") or ""
+        head, sep, rest = text.partition(":")
+        if sep and len(head) <= 4 and head.lstrip("S").rstrip("?").isdigit():
+            messages[index]["text"] = f"{label}: {rest.strip()}"
+    return changed
+
+
 def _polish_batch(batch, context, provider) -> Dict[int, str]:
     prompt = [INSTRUCTIONS, ""]
 

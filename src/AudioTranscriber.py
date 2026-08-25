@@ -121,6 +121,15 @@ class AudioTranscriber:
         # letting them guess from too little signal.
         self._session_language = {name: None for name in self.audio_sources}
 
+        # Voice embeddings, kept so the export can re-cluster them offline.
+        # Online clustering must decide on each utterance as it arrives, with
+        # no view of what follows, so it over-splits -- a real call produced
+        # twelve speakers where three carried 93% of the talking. Given the
+        # whole recording and the true headcount that is recoverable, but only
+        # if the embeddings still exist. They did not, and the labels on that
+        # meeting cannot be repaired.
+        self.speaker_embeddings = {}     # response_id -> embedding
+
         # Speaker labelling. The registry is per track: "Speaker" carries
         # everyone in the meeting and needs splitting, while "You" is one
         # person by construction. The embedder is shared and loaded lazily,
@@ -208,6 +217,7 @@ class AudioTranscriber:
                 # utterance does not inherit a blank record.
                 return
 
+            self._last_embedding = None
             label = self._identify_speaker(who_spoke, segment)
             display = f"{label}: {text}" if label else text
             print(f"Segment [{who_spoke} {segment.duration_s:.1f}s]"
@@ -274,6 +284,7 @@ class AudioTranscriber:
         result = self._registries[who_spoke].assign(embedding)
         if result.speaker is None:
             return None
+        self._last_embedding = embedding
         # A blended segment -- two voices with no pause between them -- is
         # marked rather than presented as certain.
         return result.label if result.confident else f"{result.label}?"
@@ -391,6 +402,10 @@ class AudioTranscriber:
             'structured': (text, time_spoken, response_id),
             'combined': (text, time_spoken, response_id, speaker_type)
         }
+
+        embedding = getattr(self, "_last_embedding", None)
+        if embedding is not None and response_id:
+            self.speaker_embeddings[response_id] = embedding
         #print (f"New record: {record}")
         # 更新数据结构
         update_method = 'insert' if source_info["new_phrase"] or not self.transcript_data[who_spoke] else 'update'

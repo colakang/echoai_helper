@@ -30,6 +30,7 @@ class ExportChoices:
     polish: bool = False
     backend: str = "cli"          # "cli" | "api"
     include_original: bool = False
+    merge_speakers_to: int = 0    # 0 = leave the labels alone
 
     @property
     def is_markdown(self) -> bool:
@@ -40,10 +41,11 @@ class ExportDialog(ctk.CTkToplevel):
     """One panel: format, cleanup, backend, originals. Then Save."""
 
     def __init__(self, parent, default_path: str, cli_available: bool = True,
-                 line_count: int = 0):
+                 line_count: int = 0, speakers_found: int = 0,
+                 can_merge: bool = False):
         super().__init__(parent)
         self.title("Export conversation")
-        self.geometry("520x460")
+        self.geometry("520x560")
         self.resizable(False, False)
         self.transient(parent)
 
@@ -52,6 +54,10 @@ class ExportDialog(ctk.CTkToplevel):
         self._cli_available = cli_available
         self._line_count = line_count
 
+        self._speakers_found = speakers_found
+        self._can_merge = can_merge
+        self._merge = tk.BooleanVar(value=False)
+        self._merge_to = tk.StringVar(value=str(max(2, min(speakers_found, 4))))
         self._polish = tk.BooleanVar(value=False)
         self._backend = tk.StringVar(value="cli" if cli_available else "api")
         self._originals = tk.BooleanVar(value=False)
@@ -122,6 +128,28 @@ class ExportDialog(ctk.CTkToplevel):
             wraplength=440, justify="left")
         self._originals_hint.pack(anchor="w", padx=68, pady=(0, 12))
 
+        if self._can_merge and self._speakers_found > 1:
+            merge_row = ctk.CTkFrame(self, fg_color="transparent")
+            merge_row.pack(fill="x", padx=20, pady=(4, 0))
+            ctk.CTkCheckBox(
+                merge_row,
+                text=f"Merge {self._speakers_found} detected voices down to",
+                variable=self._merge).pack(side="left")
+            ctk.CTkOptionMenu(
+                merge_row, variable=self._merge_to,
+                values=[str(i) for i in range(2, max(3, self._speakers_found))],
+                width=64).pack(side="left", padx=8)
+            ctk.CTkLabel(merge_row, text="people",
+                         font=("Arial", 12)).pack(side="left")
+            ctk.CTkLabel(
+                self,
+                text="Voices drift with volume and connection quality, so one "
+                     "person often ends up split across several labels. "
+                     "Re-groups them using the recorded voice prints.",
+                font=("Arial", 11), text_color="#8a8a8a",
+                wraplength=460, justify="left").pack(anchor="w", padx=44,
+                                                     pady=(2, 8))
+
         buttons = ctk.CTkFrame(self, fg_color="transparent")
         buttons.pack(side="bottom", fill="x", padx=20, pady=16)
         ctk.CTkButton(buttons, text="Cancel", width=100, fg_color="#3a3a3a",
@@ -176,6 +204,8 @@ class ExportDialog(ctk.CTkToplevel):
             polish=self._polish.get(),
             backend=self._backend.get(),
             include_original=self._originals.get() and self._polish.get(),
+            merge_speakers_to=(int(self._merge_to.get())
+                               if self._merge.get() else 0),
         )
         self.grab_release()
         self.destroy()
