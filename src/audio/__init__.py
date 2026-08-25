@@ -16,7 +16,7 @@ of assuming both tracks exist.
 
 import sys
 
-from .backend import AudioBackend, AudioSource, Recorder, RECORD_TIMEOUT, ENERGY_THRESHOLD
+from .backend import AudioBackend, AudioSource, Recorder, RECORD_TIMEOUT
 
 __all__ = [
     "get_audio_backend",
@@ -24,7 +24,6 @@ __all__ = [
     "AudioSource",
     "Recorder",
     "RECORD_TIMEOUT",
-    "ENERGY_THRESHOLD",
 ]
 
 

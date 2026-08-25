@@ -12,7 +12,8 @@ import queue as _queue
 from datetime import datetime, timezone
 from typing import Optional
 
-from .backend import AudioBackend, AudioSource, Recorder, RECORD_TIMEOUT, ENERGY_THRESHOLD
+from .backend import (AudioBackend, AudioSource, Recorder, RECORD_TIMEOUT,
+                      WINDOWS_ENERGY_THRESHOLD)
 
 DYNAMIC_ENERGY_THRESHOLD = False
 
@@ -25,7 +26,10 @@ class SpeechRecognitionRecorder(Recorder):
 
         self._sr_source = sr_source
         self.recorder = sr.Recognizer()
-        self.recorder.energy_threshold = ENERGY_THRESHOLD
+        # Near zero on purpose: segmentation happens on pauses downstream,
+        # and a recogniser that only calls back during speech never delivers
+        # them. See the note in backend.py.
+        self.recorder.energy_threshold = WINDOWS_ENERGY_THRESHOLD
         self.recorder.dynamic_energy_threshold = DYNAMIC_ENERGY_THRESHOLD
         self._stopper = None
 

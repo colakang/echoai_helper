@@ -22,32 +22,25 @@ import queue
 # `phrase_time_limit` so downstream phrase timing is unchanged.
 RECORD_TIMEOUT = 0.6
 
-# RMS floor on int16 samples. Chunks quieter than this never leave the
-# recorder.
+# The recorder forwards every chunk. It used to drop anything below an RMS
+# threshold, which made sense when the transcriber accumulated audio and
+# silence was pure waste -- but segmentation now happens on *pauses*, and a
+# gate here destroys exactly the information the VAD needs to find them.
 #
-# This is only a cheap pre-filter -- the VAD makes the real speech/silence
-# decision downstream -- but it has to actually sit above the device's noise
-# floor to do anything. 100 comes from the original Windows path and is far
-# too low for a Bluetooth headset in HFP mode: one measured RMS 331 in a
-# silent room, so every "silent" chunk was queued and the buffer filled with
-# room tone.
+# Measured on a 114s call: with a gate at twice the observed noise floor, 104
+# chunks of silence never arrived and the segmenter produced 5 segments with a
+# median of 7.7s, two of them hitting the hard cap. Without it, 30 segments
+# with a median of 3.0s -- matching what the same audio gives offline.
 #
-# Rather than pick a number that suits one microphone, the floor is measured
-# at startup and the gate placed above it. Mirrors what the Windows recorder
-# already did through adjust_for_ambient_noise.
-ENERGY_THRESHOLD = 100
-
-# Multiple of the measured noise floor to sit above. 2.0 leaves quiet speech
-# comfortably clear while excluding steady hiss.
-NOISE_FLOOR_MARGIN = 2.0
-
-# How long to listen to the room before deciding.
-CALIBRATION_S = 1.0
-
-# Never let calibration produce a gate so high that normal speech is lost,
-# e.g. when someone is already talking as the app starts.
-MAX_ENERGY_THRESHOLD = 1500
-
+# The VAD is the real gate and costs almost nothing: RTF 0.0027 on an M4.
+#
+# The Windows recorder cannot forward *everything* the same way -- it is built
+# on SpeechRecognition's listen_in_background, which only calls back once its
+# own detector thinks someone is talking. Setting the threshold to 1 makes it
+# fire on essentially anything, which is as close to pass-through as that API
+# allows. Untested here; flagged rather than silently left at the old value,
+# because the same reasoning applies.
+WINDOWS_ENERGY_THRESHOLD = 1
 
 class AudioSource:
     """
