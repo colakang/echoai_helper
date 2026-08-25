@@ -135,6 +135,13 @@ celerybeat.pid
 .env
 .llm
 .llm.*
+
+# Exported transcripts and recordings. Meeting content, never in the repo.
+result/
+*.jsonl
+conversation_*.md
+conversation_*.json
+.llm.*
 .venv
 env/
 venv/
