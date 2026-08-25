@@ -53,8 +53,20 @@ Homepage = "https://github.com/colakang/echoai_helper"
 Issues = "https://github.com/colakang/echoai_helper/issues"
 
 [tool.setuptools]
-packages = ["src", "src.asr", "src.audio", "src.llm", "src.custom_speech_recognition"]
+# "scripts" is a package, not a directory of loose files: src/cli.py imports
+# check_audio from it, so it has to resolve from site-packages and not merely
+# from the current working directory of a checkout.
+packages = ["src", "src.asr", "src.audio", "src.llm",
+            "src.custom_speech_recognition", "scripts"]
 include-package-data = true
 
 [tool.setuptools.package-data]
+# Everything the app reads at runtime lives inside the package. An installed
+# wheel has no project root -- the code lands in site-packages, and there is
+# nothing beside it to point at -- so conf.yaml and the prompt templates ship
+# here or they are simply absent.
+#
+# The vendored pocketsphinx data and flac binaries are deliberately not listed:
+# 42MB of a speech engine this app does not use.
+"src" = ["conf.yaml", "resources/**/*"]
 "src.asr" = ["models/*.onnx"]

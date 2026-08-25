@@ -74,6 +74,9 @@ def main(argv=None) -> int:
 
     sub.add_parser("check-audio", help="list devices and diagnose capture")
 
+    sub.add_parser(
+        "config", help="put an editable conf.yaml where you can reach it")
+
     sessions_cmd = sub.add_parser(
         "sessions", help="list, export or delete past recordings")
     sessions_cmd.add_argument("--export", type=int, metavar="N",
@@ -103,12 +106,39 @@ def main(argv=None) -> int:
     if command == "sessions":
         return _sessions(args)
 
+    if command == "config":
+        return _config()
+
     if command == "check-audio":
         from scripts import check_audio          # noqa: F401
         return check_audio.main()
 
-    from main import main as run_app
+    from .app import main as run_app
     run_app()
+    return 0
+
+
+def _config() -> int:
+    """
+    Copy the shipped conf.yaml somewhere the user can actually edit it.
+
+    Installed from a wheel, the default sits in site-packages -- not a path
+    anyone should be editing, and a reinstall would overwrite it anyway. The
+    copy in the user config directory takes precedence once it exists.
+    """
+    import shutil
+    from pathlib import Path
+    from src.config import PathConfig
+
+    target = Path(PathConfig.get_user_config_path()) / "conf.yaml"
+    if target.exists():
+        print(f"  Already yours to edit: {target}")
+        return 0
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(PathConfig.get_conf_file(), target)
+    print(f"  Wrote {target}")
+    print("  Edit it there; it overrides the shipped defaults.")
     return 0
 
 

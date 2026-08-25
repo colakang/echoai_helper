@@ -19,7 +19,7 @@ language model to clean up the finished transcript.
 </p>
 
 <p align="center">
-<img width="800" alt="EchoAI Helper Interface" src="https://github.com/colakang/echoai_helper/raw/main/resources/images/ui.png">
+<img width="800" alt="EchoAI Helper Interface" src="https://github.com/colakang/echoai_helper/raw/main/docs/images/ui.png">
 </p>
 
 ---
@@ -156,7 +156,16 @@ session from the last 12 hours is offered on the next launch.
 
 ## ⚙️ Configuration
 
-`conf.yaml` holds the model settings; everything else is in the app.
+Model settings live in `conf.yaml`; everything else is in the app. Installed
+from a wheel the shipped copy sits inside the package, so make yourself an
+editable one:
+
+```bash
+echoai-helper config     # writes conf.yaml where you can reach it, and prints the path
+```
+
+That copy overrides the defaults. You will not usually need it — both values
+below already ship as `auto`.
 
 ```yaml
 FunASR:

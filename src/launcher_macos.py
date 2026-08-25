@@ -46,7 +46,7 @@ LAUNCH_SCRIPT = """#!/bin/bash
 set -e
 
 PYTHON="{python}"
-ENTRY="{entry}"
+MODULE="{module}"
 WORKDIR="{workdir}"
 
 cd "$WORKDIR"
@@ -66,7 +66,7 @@ echo "--- launched $(date) ---" >> "$LOG"
 # -u because a GUI launch has no terminal: Python would buffer stdout and the
 # log would stay empty until the process exited, which is exactly when it is
 # least useful.
-exec "$PYTHON" -u "$ENTRY" >> "$LOG" 2>&1
+exec "$PYTHON" -u -m "$MODULE" >> "$LOG" 2>&1
 """
 
 
@@ -74,17 +74,23 @@ def bundle_path(location: Optional[Path] = None) -> Path:
     return (location or DEFAULT_LOCATION) / f"{APP_NAME}.app"
 
 
-def install(python: Optional[str] = None, entry: Optional[str] = None,
+def install(python: Optional[str] = None, module: Optional[str] = None,
             location: Optional[Path] = None, progress=print) -> Path:
     """
     Write the launcher bundle and return where it went.
 
-    Records absolute paths to the interpreter and entry point currently in
-    use, so the icon launches the same install the user just set up.
+    Records the interpreter currently in use, so the icon launches the same
+    install the user just set up.
+
+    Launches a module rather than a script path. A checkout has main.py sitting
+    at the project root; a wheel does not -- the code lands in site-packages
+    and there is no project root to point at. `-m src.app` is the one form that
+    resolves in both.
     """
     python = python or sys.executable
-    project = Path(__file__).resolve().parent.parent
-    entry = entry or str(project / "main.py")
+    package = Path(__file__).resolve().parent
+    project = package.parent
+    module = module or "src.app"
 
     app = bundle_path(location)
     macos_dir = app / "Contents" / "MacOS"
@@ -114,7 +120,7 @@ def install(python: Optional[str] = None, entry: Optional[str] = None,
             "EchoAI Helper transcribes what you say during a meeting.",
     }
 
-    icon = project / "resources" / "images" / "icon.icns"
+    icon = package / "resources" / "images" / "icon.icns"
     if icon.exists():
         shutil.copy(icon, resources / "icon.icns")
         info["CFBundleIconFile"] = "icon"
@@ -124,7 +130,7 @@ def install(python: Optional[str] = None, entry: Optional[str] = None,
 
     launcher = macos_dir / "launch"
     launcher.write_text(LAUNCH_SCRIPT.format(
-        python=python, entry=entry, workdir=str(project)))
+        python=python, module=module, workdir=str(project)))
     launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
     # Ask Launch Services to notice it now rather than whenever it next

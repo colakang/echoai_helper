@@ -21,7 +21,7 @@ def _asr_device() -> str:
     try:
         import yaml
         from .config import PathConfig
-        with open(f"{PathConfig.get_project_root()}/conf.yaml", "rb") as f:
+        with open(PathConfig.get_conf_file(), "rb") as f:
             config = yaml.safe_load(f)
         name = config.get("ASR_MODEL", "FunASR")
         return config.get(name, {}).get("device", "cpu")

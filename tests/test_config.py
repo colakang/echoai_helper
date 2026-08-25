@@ -39,9 +39,30 @@ def test_shipped_config_names_no_platform():
     """conf.yaml must not pin a device -- see the note above."""
     import yaml
     from pathlib import Path
-    root = Path(__file__).resolve().parent.parent
-    config = yaml.safe_load((root / "conf.yaml").read_text())
+    from src.config import PathConfig
+    # Resolved rather than hardcoded: the shipped default lives inside the
+    # package so it survives being installed from a wheel, where there is no
+    # project root to read it from.
+    config = yaml.safe_load(Path(PathConfig.get_conf_file()).read_text())
     assert config["FunASR"]["device"] == "auto"
+
+
+def test_shipped_config_travels_with_the_package():
+    """
+    conf.yaml must sit inside the package, not beside it.
+
+    This is what an actual publish got wrong: the wheel installed cleanly and
+    then died on launch, because conf.yaml, the prompt templates and the GUI
+    itself were all at the project root -- which does not exist once the code
+    is in site-packages.
+    """
+    from pathlib import Path
+    from src.config import PathConfig
+    package = Path(PathConfig.get_package_root())
+    assert (package / "conf.yaml").exists()
+    assert (package / "resources" / "config" / "settings.json").exists()
+    assert (package / "resources" / "prompt").is_dir()
+    assert (package / "app.py").exists(), "the GUI must ship inside the package"
 
 
 def test_capture_dependencies_are_platform_split():
