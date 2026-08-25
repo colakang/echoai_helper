@@ -116,6 +116,69 @@ def _run_first_launch_setup(root=None):
     return False
 
 
+def _offer_recovery(root, transcriber, response_manager):
+    """
+    Offer to reopen a session that ended without being exported.
+
+    Only when the last one crashed, had content, and was recent. A meeting
+    from last week belongs in the history list, not spliced onto the front of
+    today's -- resuming it would merge two unrelated conversations into one
+    transcript.
+    """
+    if not messagebox:
+        return
+    try:
+        from src.session import find_recoverable, to_conversation
+
+        recoverable = find_recoverable()
+        if recoverable is None:
+            return
+
+        if not messagebox.askyesno(
+                "Recover the last meeting?",
+                f"{recoverable.name} ended without being exported, and has "
+                f"{recoverable.line_count} lines.\n\n"
+                "Load it so you can export it now?\n\n"
+                "It stays on disk either way — you can also reach it from "
+                "Past meetings."):
+            return
+
+        conversation = to_conversation(recoverable.path)
+        _load_conversation(transcriber, conversation)
+        messagebox.showinfo(
+            "Loaded",
+            f"{recoverable.line_count} lines restored. Export them from the "
+            "button below.\n\nAnything said from now on is recorded to a new "
+            "session.")
+    except Exception as e:
+        print(f"Could not recover the last session: {e}")
+
+
+def _load_conversation(transcriber, conversation):
+    """Put a saved conversation back into the in-memory transcript."""
+    from datetime import datetime as _dt
+
+    messages = conversation.get("conversation", {}).get("messages", [])
+    for message in messages:
+        text = message.get("text") or ""
+        if not text.strip():
+            continue
+        role = (message.get("role") or "speaker").lower()
+        try:
+            when = _dt.fromisoformat(message["timestamp"]).replace(tzinfo=None)
+        except (KeyError, TypeError, ValueError):
+            when = _dt.now()
+
+        entry = (text, when, message.get("response_id"))
+        transcriber.structured_transcript[role].insert(0, entry)
+        transcriber.structured_transcript["combined"].insert(
+            0, (text, when, message.get("response_id"), role))
+
+        embedding = message.get("embedding")
+        if embedding and message.get("response_id"):
+            transcriber.speaker_embeddings[message["response_id"]] = embedding
+
+
 def _restore_on_exit(root):
     """
     Put the system output back on the way out, without asking.
@@ -130,6 +193,13 @@ def _restore_on_exit(root):
     guessing: someone listening through an external monitor should not end up
     on the built-in speakers.
     """
+    try:
+        session = getattr(_restore_on_exit, "session", None)
+        if session is not None:
+            session.close()
+    except Exception as e:
+        print(f"Could not close the session: {e}")
+
     if sys.platform == "darwin":
         try:
             from src.audio import setup_macos as setup
@@ -846,6 +916,13 @@ def main():
         response_manager,
     )
 
+    # One session per launch, created without asking. Requiring a step before
+    # recording hands the user an implementation detail, and forgetting it
+    # costs the whole meeting.
+    from src.session import SessionWriter
+    transcriber.session = SessionWriter()
+    print(f"[INFO] Recording to {transcriber.session.path}")
+
     # Phase 2: Dual-thread transcription (shared model, independent queues)
     if user_audio_recorder is not None:
         mic_transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(mic_queue,), name="MicTranscriber")
@@ -927,7 +1004,9 @@ def main():
         except Exception as e:
             print(f"Could not select the recording output: {e}")
 
+    _restore_on_exit.session = transcriber.session
     root.protocol("WM_DELETE_WINDOW", lambda: _restore_on_exit(root))
+    _offer_recovery(root, transcriber, response_manager)
 
     print("READY")
     root.grid_rowconfigure(0, weight=85)  # 主内容区域占70%

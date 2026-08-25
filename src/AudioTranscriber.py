@@ -130,6 +130,11 @@ class AudioTranscriber:
         # meeting cannot be repaired.
         self.speaker_embeddings = {}     # response_id -> embedding
 
+        # Written to as the meeting happens, so a crash costs the last
+        # sentence rather than the whole thing. Optional: a transcript that
+        # cannot be saved is still worth having on screen.
+        self.session = None
+
         # Speaker labelling. The registry is per track: "Speaker" carries
         # everyone in the meeting and needs splitting, while "You" is one
         # person by construction. The embedder is shared and loaded lazily,
@@ -223,6 +228,13 @@ class AudioTranscriber:
             print(f"Segment [{who_spoke} {segment.duration_s:.1f}s]"
                   f"{' ' + label if label else ''} {text}")
             self.update_transcript(who_spoke, display, time_spoken)
+
+            if self.session is not None:
+                self.session.append(
+                    track=who_spoke, text=text, timestamp=time_spoken,
+                    speaker=label,
+                    response_id=self._last_response_id,
+                    embedding=self._last_embedding)
             self.audio_sources[who_spoke]["new_phrase"] = True
 
             # Trigger the responder here, not when the phrase started. The
@@ -406,6 +418,7 @@ class AudioTranscriber:
         embedding = getattr(self, "_last_embedding", None)
         if embedding is not None and response_id:
             self.speaker_embeddings[response_id] = embedding
+        self._last_response_id = response_id
         #print (f"New record: {record}")
         # 更新数据结构
         update_method = 'insert' if source_info["new_phrase"] or not self.transcript_data[who_spoke] else 'update'

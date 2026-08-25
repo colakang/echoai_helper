@@ -17,6 +17,42 @@ import argparse
 import sys
 
 
+def _sessions(args) -> int:
+    """List, export or delete past recordings."""
+    from src.session import list_sessions, to_conversation, delete_session
+    from pathlib import Path
+
+    sessions = list_sessions()
+    if not sessions:
+        print("  No recordings yet.")
+        return 0
+
+    if args.delete is not None:
+        target = sessions[args.delete]
+        if delete_session(target.path):
+            print(f"  Deleted {target.name}")
+            return 0
+        return 1
+
+    if args.export is not None:
+        target = sessions[args.export]
+        conversation = to_conversation(target.path)
+        out = Path(args.output or f"conversation_{target.path.stem}.md")
+        if out.suffix.lower() == ".json":
+            import json
+            out.write_text(json.dumps(conversation, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+        else:
+            from src.export_markdown import render
+            out.write_text(render(conversation), encoding="utf-8")
+        print(f"  Wrote {out}")
+        return 0
+
+    for index, info in enumerate(sessions):
+        print(f"  [{index}] {info.describe()}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="echoai-helper",
@@ -37,6 +73,14 @@ def main(argv=None) -> int:
     launcher_cmd.add_argument("--uninstall", action="store_true")
 
     sub.add_parser("check-audio", help="list devices and diagnose capture")
+
+    sessions_cmd = sub.add_parser(
+        "sessions", help="list, export or delete past recordings")
+    sessions_cmd.add_argument("--export", type=int, metavar="N",
+                              help="export recording N")
+    sessions_cmd.add_argument("--delete", type=int, metavar="N",
+                              help="delete recording N")
+    sessions_cmd.add_argument("-o", "--output", help="where to write the export")
     sub.add_parser("version", help="print the version")
 
     args = parser.parse_args(argv)
@@ -55,6 +99,9 @@ def main(argv=None) -> int:
 
     if command == "install-launcher":
         return _launcher(args)
+
+    if command == "sessions":
+        return _sessions(args)
 
     if command == "check-audio":
         from scripts import check_audio          # noqa: F401
