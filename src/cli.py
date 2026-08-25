@@ -72,7 +72,11 @@ def main(argv=None) -> int:
         "install-launcher", help="add a double-clickable icon")
     launcher_cmd.add_argument("--uninstall", action="store_true")
 
-    sub.add_parser("check-audio", help="list devices and diagnose capture")
+    # Registered so it appears in --help. Its arguments are handled before
+    # argparse ever sees them -- see the note at the top of main().
+    sub.add_parser("check-audio",
+                   help="list devices and diagnose capture "
+                        "(--record, --selftest, --source)")
 
     sub.add_parser(
         "config", help="put an editable conf.yaml where you can reach it")
@@ -85,6 +89,15 @@ def main(argv=None) -> int:
                               help="delete recording N")
     sessions_cmd.add_argument("-o", "--output", help="where to write the export")
     sub.add_parser("version", help="print the version")
+
+    # check-audio owns its own flags (--record, --selftest, --source), and
+    # forwarding them through argparse does not work: REMAINDER drops leading
+    # options, and redeclaring them here would let the two definitions drift
+    # apart. Hand the tail over untouched instead.
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] == "check-audio":
+        from scripts import check_audio
+        return check_audio.main(raw[1:])
 
     args = parser.parse_args(argv)
     command = args.command or "run"
@@ -108,10 +121,6 @@ def main(argv=None) -> int:
 
     if command == "config":
         return _config()
-
-    if command == "check-audio":
-        from scripts import check_audio          # noqa: F401
-        return check_audio.main()
 
     from .app import main as run_app
     run_app()
