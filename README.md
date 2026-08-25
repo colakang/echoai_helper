@@ -72,6 +72,10 @@ echoai-helper install-launcher    # adds an icon to Launchpad
 
 Launch from Launchpad, or run `echoai-helper`.
 
+**Apple Silicon.** Transcription runs on Metal and keeps up comfortably.
+**Intel Macs install and run, but see [known limitations](#-known-limitations)** —
+there is no Metal path, so they fall back to the CPU.
+
 `setup` installs a virtual audio device and builds the Multi-Output that lets
 you hear a meeting while it is being recorded. macOS asks for a password once,
 because that installs an audio driver — nothing else needs a privilege, and
@@ -241,6 +245,12 @@ routing, what has been measured, and where the sharp edges are.
   detector threshold was lowered to pass silence through, because segmentation
   now happens on pauses and a recogniser that only reports speech never delivers
   them — reasoned, not verified. Reports welcome.
+- **Intel Macs fall back to the CPU.** PyTorch has shipped no Intel-Mac build
+  since 2.2.2, and there is no Metal path on Intel regardless; `uv` resolves to
+  that older torch and installs cleanly. But an M4 already measures a dual-track
+  real-time factor of 2.04 on CPU — falling behind twice over — and an Intel CPU
+  is slower again. Expect transcription not to keep up with a live meeting.
+  Untested: reasoned from the wheel availability and the CPU measurement.
 - **macOS audio routing is a shared setting.** Selecting the Multi-Output changes
   the output for every app, and macOS sometimes moves it back after sleep.
   Checked at every launch.

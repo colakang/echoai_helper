@@ -274,8 +274,13 @@ def _transcribe(raw: bytes, recorder, captured_s: float) -> None:
     print("=" * 68)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv=None) -> int:
+    # argv is passed in rather than read from sys.argv, because this is reached
+    # both as a script and as `echoai-helper check-audio` -- and in the second
+    # case sys.argv still carries the subcommand name, which argparse rejects
+    # as an unrecognized argument.
+    parser = argparse.ArgumentParser(prog="echoai-helper check-audio",
+                                     description=__doc__)
     parser.add_argument("--record", type=float, metavar="SECONDS",
                         help="capture this many seconds and transcribe")
     parser.add_argument("--selftest", action="store_true",
@@ -283,7 +288,7 @@ def main() -> int:
                              "transcribe it back (no manual routing needed)")
     parser.add_argument("--source", choices=["mic", "speaker"], default="speaker",
                         help="which track to record (default: speaker)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     show_devices()
     print()
