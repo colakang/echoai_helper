@@ -51,6 +51,18 @@ class PathConfig:
         return os.path.join(PathConfig.get_resource_path(), 'prompt')
 
     @staticmethod
+    def get_user_prompt_path():
+        """
+        Where a user's own imported templates live.
+
+        Outside the package, for the same reason conf.yaml has a copy there:
+        installed from a wheel the shipped templates sit in site-packages,
+        which is not somewhere anyone should be writing and which a reinstall
+        overwrites. Imports go here and survive.
+        """
+        return os.path.join(PathConfig.get_user_config_path(), "prompt")
+
+    @staticmethod
     def get_conf_file():
         """
         conf.yaml, preferring the user's own copy.
@@ -259,6 +271,23 @@ class AudioConfig:
 
     # Which named profile is current. See src/profiles.py.
     _profile = "meeting"
+
+    @classmethod
+    def replies_enabled(cls):
+        """
+        Whether to ask a language model for a suggested reply.
+
+        Two conditions, and the mode one was missing. Reply suggestions are an
+        interview feature: in meeting notes the pause is long and partials are
+        off, so an answer arrives well after the moment it was for, and nobody
+        is looking at that pane anyway.
+
+        Without this the only gate was the Record Only checkbox, which meant a
+        user in meeting mode who unticked it started paying for an API call on
+        every sentence the far end spoke, with nothing on screen to say so.
+        """
+        return (cls._profile == "interview"
+                and not SystemConfig.get_record_only_mode())
 
     @classmethod
     def get_profile(cls):

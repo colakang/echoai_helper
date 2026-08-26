@@ -288,8 +288,7 @@ class AudioTranscriber:
             # Trigger the responder here, not when the phrase started. The
             # old code called create_response() with the first fragment of an
             # utterance, so the LLM was answering a truncated question.
-            if (who_spoke.lower() == "speaker"
-                    and not SystemConfig.get_record_only_mode()):
+            if who_spoke.lower() == "speaker" and AudioConfig.replies_enabled():
                 self.transcript_changed_event.set()
 
     def preload_speaker_model(self) -> bool:

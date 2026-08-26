@@ -467,8 +467,10 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         "Case Detail": (case_detail_files, "case_detail"),
         "Knowledge Base": (knowledge_files, "knowledge")
     }
+    template_imports = {}
 
     template_vars = {}
+    template_menus = {}
     row = 0
     for label, (options, setting_key) in templates.items():
         label_widget = ctk.CTkLabel(
@@ -490,6 +492,37 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         )
         menu.grid(row=row, column=0, padx=(80, 5), pady=1, sticky="e")
         template_vars[setting_key] = var
+        template_menus[setting_key] = menu
+
+        # Import, per category. The file dialog is the only way to add a
+        # template without knowing where the app keeps them -- which, once
+        # installed from a wheel, is a directory inside site-packages that
+        # nobody should be asked to find.
+        def make_importer(category=setting_key, target_menu=menu, target_var=var):
+            def do_import():
+                path = filedialog.askopenfilename(
+                    title=f"Import {category.replace('_', ' ')}",
+                    filetypes=[("Text and Python", "*.txt *.py *.md"),
+                               ("All files", "*.*")])
+                if not path:
+                    return
+                name = TemplateManager.import_template(category, path)
+                if not name:
+                    messagebox.showerror(
+                        "Import failed",
+                        f"Could not import {os.path.basename(path)}.")
+                    return
+                names = TemplateManager.get_template_files(category)
+                target_menu.configure(values=names)
+                target_var.set(name)          # selecting it applies it
+            return do_import
+
+        import_button = ctk.CTkButton(
+            main_control_frame, text="+", width=26, height=dropdown_height,
+            command=make_importer(),
+            fg_color="#2B4C7E")
+        import_button.grid(row=row, column=1, padx=(0, 5), pady=1, sticky="w")
+        template_imports[setting_key] = import_button
         row += 1
 
     def on_selection_change(*args):
@@ -504,7 +537,16 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
                 template_vars["knowledge"].get()
             )
             if new_role is None:
+                # Say so on screen, not only in a log nobody has open. A failed
+                # switch leaves the *previous* persona in force while the
+                # dropdown shows the new one -- the app looks changed and is
+                # not, which is the worst of both.
                 print("Warning: Failed to update system role")
+                messagebox.showwarning(
+                    "Template not applied",
+                    "That combination could not be loaded, so the previous "
+                    "one is still in use.\n\nSee the log for what went wrong:\n"
+                    "~/Library/Logs/EchoAI Helper.log")
         except Exception as e:
             print(f"Error updating system role: {e}")
 
@@ -652,9 +694,24 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     )
     profile_hint.grid(row=1, column=2, columnspan=1, padx=5, pady=(0, 2), sticky="w")
 
+    def _apply_template_availability(profile):
+        """
+        The prompt templates only feed the reply suggestions, and replies only
+        happen in interview mode -- so in meeting mode these three controls do
+        nothing at all. Leaving them live invites someone to spend time
+        choosing a persona that will never be consulted.
+
+        Greying them out is only honest if the machinery behind them is off
+        too; see AudioConfig.set_replies_enabled below.
+        """
+        state = "normal" if profile.key == "interview" else "disabled"
+        for widget in list(template_menus.values()) + list(template_imports.values()):
+            widget.configure(state=state)
+
     def on_profile_change(label):
         profile = profiles.by_label(label)
         profiles.apply(profile, transcriber)
+        _apply_template_availability(profile)
         settings_manager.update_setting("profile", profile.key)
         settings_manager.update_setting("min_silence_ms", profile.min_silence_ms)
         profile_hint.configure(text=profile.description)
@@ -671,6 +728,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         command=on_profile_change,
     )
     profile_dropdown.grid(row=0, column=2, padx=(60, 5), pady=2, sticky="w")
+    _apply_template_availability(saved_profile)
 
     # Pause length -- the one segmentation knob worth exposing. Shorter reacts
     # sooner but splits sentences; longer merges separate turns.
