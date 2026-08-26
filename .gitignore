@@ -186,3 +186,6 @@ cython_debug/
 
 # funasr/onnxruntime scratch file, created in the cwd at model load
 :memory:*
+
+# macOS Finder droppings. They appear in any directory anyone opens.
+.DS_Store
