@@ -156,3 +156,34 @@ def test_the_icon_ships_with_the_package():
     root = Path(__file__).resolve().parent.parent
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
     assert 'resources/**/*' in pyproject
+
+
+def test_the_launcher_repairs_the_path():
+    """
+    A double-clicked app inherits /usr/bin:/bin:/usr/sbin:/sbin and nothing
+    else. No shell runs, so no profile applies, and everything Homebrew has
+    installed is invisible.
+
+    That is not theoretical: the app called ffmpeg, could not find it, and
+    quit on startup with "ffmpeg is not installed" while ffmpeg sat in
+    /opt/homebrew/bin. From a terminal it worked, which is the worst kind of
+    bug to have in a launcher.
+
+    Both prefixes, because Apple Silicon and Intel put Homebrew in different
+    places.
+    """
+    from src.launcher_macos import LAUNCH_SCRIPT
+    assert "/opt/homebrew/bin" in LAUNCH_SCRIPT
+    assert "/usr/local/bin" in LAUNCH_SCRIPT
+    assert LAUNCH_SCRIPT.index("export PATH") < LAUNCH_SCRIPT.index('exec "$PYTHON"'), \
+        "PATH has to be set before the app is started, not after"
+
+
+def test_the_launcher_runs_a_module_not_a_file():
+    """
+    A checkout has main.py at the project root; a wheel does not -- the code
+    lands in site-packages and there is no project root to point an installed
+    icon at. `-m src.app` is the one form that resolves in both.
+    """
+    from src.launcher_macos import LAUNCH_SCRIPT
+    assert '-m "$MODULE"' in LAUNCH_SCRIPT

@@ -51,6 +51,13 @@ WORKDIR="{workdir}"
 
 cd "$WORKDIR"
 
+# A double-clicked app inherits a minimal PATH -- /usr/bin:/bin:/usr/sbin:/sbin
+# -- and nothing from a shell profile, because no shell ran. Anything installed
+# by Homebrew is therefore invisible, which is how a launcher that worked from
+# a terminal died on startup looking for ffmpeg. Both Homebrew prefixes, since
+# Apple Silicon and Intel differ.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 if [ ! -x "$PYTHON" ]; then
   osascript -e 'display alert "EchoAI Helper" message "The Python environment \
 this launcher points at has gone. Reinstall, then run --install-launcher again."'

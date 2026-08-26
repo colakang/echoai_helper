@@ -2,166 +2,176 @@
 """
 scripts/make_icon.py
 
-Generate the application icon.
+Build the application icon from the EchoAI brand mark.
 
-The icon is code rather than a checked-in binary so it can be read, changed and
-regenerated. It also removes a dependency: rendering is done here with plain
-zlib and arithmetic, so building it needs nothing beyond a Python install and
-the `iconutil` that ships with macOS.
-
-    python scripts/make_icon.py
+    .venv/bin/python scripts/make_icon.py [path/to/logo.png]
 
 Writes src/resources/images/icon.icns, which launcher_macos.py copies into the
 bundle it creates. Before this existed the launcher looked for that file, did
-not find it, and the app showed up in Launchpad with a blank icon.
+not find it, and the app appeared in Launchpad blank.
 
-Design notes, such as they are: a level meter, because that is what the app is
-doing and it survives being drawn at 16 pixels, which is where Finder lists and
-the menu bar will show it.
+Two things the brand artwork cannot do unaltered, and this script fixes:
 
-Three bars, not the five or seven a meter would naturally have. Five was tried
-and fails at the smallest size: the gaps are under a pixel once downscaled, the
-bars bleed together, and the icon reads as a pale blob. Legibility at 16px
-decides this, not how it looks at 1024.
+**The wordmark has to go.** The source logo sets "echoAi 365" beneath the
+headset. At the sizes macOS actually draws an app icon -- 16 and 32 pixels in
+Finder lists, the menu bar and the window switcher -- that text is two or three
+pixels tall and becomes a grey smear. Apple's guidance is blunt about this and
+it is right. So the mark is cropped out and the type left behind.
 
-Antialiasing evaluates a signed distance per pixel rather than supersampling --
-sharper, and about ten times quicker in pure Python.
+**The frame has to become a squircle.** The artwork is a full-bleed square. A
+square icon among rounded ones reads as broken, so the mark is composited onto
+a rounded rectangle at the corner radius macOS uses for its own.
+
+**Detail is dropped at the small sizes rather than scaled.** The circuit
+filigree inside the headset is lovely at 512 and turns to mud at 16, so the
+smallest slices get the headset alone, recoloured bright enough to separate
+from the plate. That is not a compromise: an .icns is a set of images, not one
+image resized, and building it that way is how Apple's own icons work.
+
+Every claim above was checked by decomposing the finished .icns with
+`iconutil -c iconset` and looking at the actual 16x16 file. Resizing the icns
+with `sips` does not show you that -- it downsamples the largest slice and
+hides exactly the problem you are looking for.
 """
 
-import math
-import struct
 import subprocess
 import sys
 import tempfile
-import zlib
 from pathlib import Path
+
+try:
+    from PIL import Image, ImageDraw, ImageFilter
+except ImportError:
+    sys.exit("This needs Pillow:  uv pip install --python .venv/bin/python pillow\n"
+             "It is a build-time tool only; the app itself does not import it.")
 
 SIZE = 1024
 
-# Deep blue to violet. Dark enough that the white meter carries the shape, and
-# distinguishable from the blue-grey macOS fills it will sit next to.
-TOP = (37, 74, 194)
-BOTTOM = (98, 44, 176)
+# Sampled from the artwork, so the plate and the mark are the same navy.
+BACKGROUND = (9, 14, 45)
 
-CORNER = 0.2237 * SIZE          # what macOS uses for its own rounded squares
+CORNER = 0.2237                 # macOS uses this fraction of the icon's width
 
-# Bar geometry, as fractions of the canvas.
-BAR_COUNT = 3
-BAR_W = 0.150
-BAR_GAP = 0.105
-BAR_HEIGHTS = (0.42, 0.74, 0.42)
+# Where the mark sits in a 1024x1024 source, and how much of the plate it fills.
+MARK_BOX = (262, 175, 762, 645)
+MARK_SCALE = 0.76
+# The small mark has no detail to carry it, so it leans on size instead.
+SMALL_MARK_SCALE = 0.90
 
-
-def rounded_rect_distance(x, y, cx, cy, half_w, half_h, radius):
-    """Signed distance to a rounded rectangle; negative inside."""
-    dx = abs(x - cx) - (half_w - radius)
-    dy = abs(y - cy) - (half_h - radius)
-    outside = math.hypot(max(dx, 0.0), max(dy, 0.0))
-    inside = min(max(dx, dy), 0.0)
-    return outside + inside - radius
+# Below this pixel size the filigree is mud; use the simplified mark instead.
+SIMPLIFY_BELOW = 48
 
 
-def coverage(distance, softness=1.0):
-    """Antialiased 0..1 coverage from a signed distance."""
-    return min(1.0, max(0.0, 0.5 - distance / softness))
+def rounded_plate(size: int, radius_frac: float, colour) -> Image.Image:
+    """A macOS-shaped rounded square, antialiased by rendering large."""
+    scale = 4
+    big = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(big)
+    draw.rounded_rectangle(
+        [(0, 0), (size * scale - 1, size * scale - 1)],
+        radius=int(radius_frac * size * scale),
+        fill=colour + (255,))
+    return big.resize((size, size), Image.LANCZOS)
 
 
-def render():
-    half = SIZE / 2
-    bar_w = BAR_W * SIZE
-    gap = BAR_GAP * SIZE
-    span = BAR_COUNT * bar_w + (BAR_COUNT - 1) * gap
-    first_cx = half - span / 2 + bar_w / 2
+def extract_mark(logo: Image.Image) -> Image.Image:
+    """
+    The headset, cut out of its background and without the wordmark.
 
-    bars = []
-    for i, height_frac in enumerate(BAR_HEIGHTS):
-        bars.append((first_cx + i * (bar_w + gap),
-                     height_frac * SIZE / 2))
+    The artwork is fully opaque -- a navy rectangle with the mark painted on
+    it -- so cropping alone yields a navy tile, not a mark. Pasting that over a
+    navy plate happens to look right, which is exactly the kind of accident
+    that survives until someone changes the plate colour or brightens the mark
+    and the whole tile lights up.
 
-    rows = []
-    for y in range(SIZE):
-        row = bytearray()
-        # Vertical gradient, computed once per row.
-        t = y / (SIZE - 1)
-        base = tuple(int(round(TOP[c] + (BOTTOM[c] - TOP[c]) * t))
-                     for c in range(3))
-        for x in range(SIZE):
-            px, py = x + 0.5, y + 0.5
-
-            outside = 1.0 - coverage(
-                rounded_rect_distance(px, py, half, half, half, half, CORNER))
-            if outside >= 1.0:
-                row += b"\x00\x00\x00\x00"          # fully outside the squircle
-                continue
-
-            r, g, b = base
-            # The meter, in white, over the gradient.
-            for cx, half_h in bars:
-                d = rounded_rect_distance(px, py, cx, half, bar_w / 2,
-                                          half_h, bar_w / 2)
-                ink = coverage(d)
-                if ink > 0.0:
-                    r = int(round(r + (255 - r) * ink))
-                    g = int(round(g + (255 - g) * ink))
-                    b = int(round(b + (255 - b) * ink))
-
-            alpha = int(round((1.0 - outside) * 255))
-            row += bytes((r, g, b, alpha))
-        rows.append(bytes(row))
-    return rows
+    So the background is keyed out by luminance. The field is very dark and
+    every part of the mark is not, which makes the separation clean and needs
+    no mask to be drawn by hand.
+    """
+    mark = logo.crop(MARK_BOX).convert("RGBA")
+    luma = mark.convert("L")
+    # Below FLOOR is background, above CEILING is solidly mark; between them
+    # is the antialiased edge, and keeping that ramp is what stops the cut-out
+    # looking like it was done with scissors.
+    floor, ceiling = 26, 90
+    alpha = luma.point(
+        lambda v: 0 if v <= floor else
+        (255 if v >= ceiling else int((v - floor) * 255 / (ceiling - floor))))
+    r, g, b, _ = mark.split()
+    return Image.merge("RGBA", (r, g, b, alpha))
 
 
-def write_png(path: Path, rows) -> None:
-    """Minimal RGBA PNG. No dependency worth adding for this."""
-    raw = b"".join(b"\x00" + row for row in rows)
+def simplify(mark: Image.Image) -> Image.Image:
+    """
+    Make the mark survive being drawn at 16 pixels.
 
-    def chunk(tag, data):
-        body = tag + data
-        return (struct.pack(">I", len(data)) + body
-                + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
+    Two separate problems, and the second is the one that matters. Blurring
+    away the circuit filigree is easy. The hard part is that this artwork is
+    dark-on-dark by design -- a mid-blue headset on a navy field -- which reads
+    beautifully at 512 where the detail carries it, and at 16 collapses into a
+    single dark smudge because there is almost no figure-to-ground contrast
+    left once the detail is gone.
 
-    png = (b"\x89PNG\r\n\x1a\n"
-           + chunk(b"IHDR", struct.pack(">IIBBBBB", SIZE, SIZE, 8, 6, 0, 0, 0))
-           + chunk(b"IDAT", zlib.compress(raw, 9))
-           + chunk(b"IEND", b""))
-    path.write_bytes(png)
+    So the small mark is lifted towards the brand's own cyan until it separates
+    from the plate. It is the same shape and the same hue family; it is simply
+    bright enough to be seen at a size where nothing else is.
+    """
+    blurred = mark.filter(ImageFilter.GaussianBlur(radius=mark.width * 0.018))
+    r, g, b, a = blurred.split()
+    # Firm up what the blur softened, so the headset comes back solid while the
+    # filigree -- which the blur has already thinned to nothing -- stays gone.
+    a = a.point(lambda v: 0 if v < 90 else min(255, int((v - 90) * 3.0)))
+    # Recolour to the logo's own highlight cyan. The shape is unchanged; it is
+    # simply bright enough to separate from the plate at a size where detail
+    # cannot do that job.
+    r = r.point(lambda _: 122)
+    g = g.point(lambda _: 232)
+    b = b.point(lambda _: 216)
+    return Image.merge("RGBA", (r, g, b, a))
 
 
-def build_icns(master: Path, out: Path) -> None:
-    """Downscale into an iconset and let macOS assemble the .icns."""
-    with tempfile.TemporaryDirectory() as tmp:
-        iconset = Path(tmp) / "icon.iconset"
-        iconset.mkdir()
-        for size in (16, 32, 128, 256, 512):
-            for scale, suffix in ((1, ""), (2, "@2x")):
-                pixels = size * scale
-                target = iconset / f"icon_{size}x{size}{suffix}.png"
-                subprocess.run(
-                    ["sips", "-z", str(pixels), str(pixels), str(master),
-                     "--out", str(target)],
-                    check=True, capture_output=True)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["iconutil", "-c", "icns", str(iconset),
-                        "-o", str(out)], check=True, capture_output=True)
+def compose(mark: Image.Image, size: int, scale: float = MARK_SCALE) -> Image.Image:
+    plate = rounded_plate(size, CORNER, BACKGROUND)
+    target = int(size * scale)
+    scaled = mark.resize((target, target), Image.LANCZOS)
+    offset = ((size - target) // 2, (size - target) // 2)
+    plate.alpha_composite(scaled, offset)
+    return plate
 
 
 def main() -> int:
     if sys.platform != "darwin":
         print("iconutil is macOS-only; the .icns is committed, so this only "
-              "needs running when the design changes.")
+              "needs running when the artwork changes.")
         return 0
 
     root = Path(__file__).resolve().parent.parent
-    out = root / "src" / "resources" / "images" / "icon.icns"
+    default_logo = root / "docs" / "images" / "logo.png"
+    source = Path(sys.argv[1]) if len(sys.argv) > 1 else default_logo
+    if not source.exists():
+        return print(f"No artwork at {source}") or 1
 
-    print(f"Rendering {SIZE}x{SIZE}...")
-    rows = render()
+    out = root / "src" / "resources" / "images" / "icon.icns"
+    logo = Image.open(source).convert("RGBA")
+    if logo.size != (SIZE, SIZE):
+        logo = logo.resize((SIZE, SIZE), Image.LANCZOS)
+
+    mark = extract_mark(logo)
+    small_mark = simplify(mark)
 
     with tempfile.TemporaryDirectory() as tmp:
-        master = Path(tmp) / "icon.png"
-        write_png(master, rows)
-        print("Building .icns...")
-        build_icns(master, out)
+        iconset = Path(tmp) / "icon.iconset"
+        iconset.mkdir()
+        for base in (16, 32, 128, 256, 512):
+            for retina, suffix in ((1, ""), (2, "@2x")):
+                pixels = base * retina
+                small = pixels < SIMPLIFY_BELOW
+                compose(small_mark if small else mark, pixels,
+                        SMALL_MARK_SCALE if small else MARK_SCALE).save(
+                    iconset / f"icon_{base}x{base}{suffix}.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(out)],
+                       check=True, capture_output=True)
 
     print(f"Wrote {out}  ({out.stat().st_size:,} bytes)")
     return 0
