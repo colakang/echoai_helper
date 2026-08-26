@@ -1026,10 +1026,19 @@ def main():
             input("Press Enter to exit...")
             return
                 
-        # 检查ffmpeg
-        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # ffmpeg has to be on PATH, and a double-clicked app has almost none:
+        # no shell runs, so nothing from a profile applies and Homebrew is
+        # invisible. The launcher puts the Homebrew prefixes back; say so here,
+        # because "not installed" is misleading when it is installed and merely
+        # unreachable.
+        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
     except FileNotFoundError:
-        print("ERROR: The ffmpeg library is not installed. Please install ffmpeg and try again.")
+        print("ERROR: ffmpeg was not found on PATH.")
+        print(f"       PATH is: {os.environ.get('PATH', '')}")
+        print("       Install it with:  brew install ffmpeg")
+        print("       If it is installed, the launcher needs reinstalling:")
+        print("           echoai-helper install-launcher")
         return
 
     TemplateManager.ensure_template_directories()
