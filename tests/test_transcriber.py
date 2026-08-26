@@ -282,3 +282,80 @@ def test_tracks_keep_separate_languages():
 
     assert t._session_language["Speaker"] == "yue"
     assert t._session_language["You"] == "en"
+
+
+# --------------------------------------------------------------------------
+# Growing a track after construction
+# --------------------------------------------------------------------------
+
+def test_attaching_a_track_that_did_not_exist_at_startup():
+    """
+    A Mac mini has no built-in microphone, so the "You" track does not exist
+    when the app starts. Attaching a headset mid-meeting has to add it, or the
+    audio is captured and then dropped for the rest of the call.
+    """
+    transcriber = make_transcriber(speaker=FakeSource())
+    assert "You" not in transcriber.audio_sources
+
+    added = transcriber.attach_source("You", FakeSource())
+
+    assert added
+    # Every per-track structure has to be there, or the first chunk raises.
+    for store in (transcriber.audio_sources, transcriber.source_locks,
+                  transcriber.segmenters, transcriber.trackers,
+                  transcriber._session_language, transcriber._registries):
+        assert "You" in store
+
+
+def test_attaching_an_existing_track_changes_nothing():
+    """
+    A device moving is not a reason to forget what was said on that track.
+    Re-attaching must not reset the segmenter, the language history or the
+    speaker registry mid-meeting.
+    """
+    transcriber = make_transcriber(speaker=FakeSource())
+    before = transcriber.segmenters["Speaker"]
+    transcriber._session_language["Speaker"] = "yue"
+
+    added = transcriber.attach_source("Speaker", FakeSource())
+
+    assert not added
+    assert transcriber.segmenters["Speaker"] is before
+    assert transcriber._session_language["Speaker"] == "yue"
+
+
+# --------------------------------------------------------------------------
+# Punctuation-only transcriptions
+# --------------------------------------------------------------------------
+#
+# Room noise passes the VAD, reaches the model, and comes back as a bare ".".
+# Measured on the 84-minute meeting on record: 169 of 1312 lines, 12.9%. Each
+# was written to the transcript, exported, and then paid for a second time as
+# tokens when the cleanup pass sent it to a language model. Some of them were
+# 25-second segments -- the hard cap -- meaning 25 seconds of noise went
+# through the model to produce one full stop.
+
+def test_punctuation_only_transcriptions_are_dropped():
+    for text in (".", "。", "...", "。。。", "?!", "，", " . "):
+        assert not AudioTranscriber._is_usable(text), f"{text!r} should be dropped"
+
+
+def test_empty_transcriptions_are_dropped():
+    for text in ("", "   ", "\n", None):
+        assert not AudioTranscriber._is_usable(text)
+
+
+def test_real_speech_survives_in_every_language_this_transcribes():
+    """
+    The filter looks for any letter, digit or CJK character. Nothing with
+    content can fail it -- including a single character, which in Chinese is a
+    whole word, and including partial or misheard text, which is still evidence
+    of what was said.
+    """
+    for text in ("ok", "一", "3", "こんにちは", "안녕", "ums ay.", "係", "冇"):
+        assert AudioTranscriber._is_usable(text), f"{text!r} must be kept"
+
+
+def test_a_line_is_kept_even_when_mostly_punctuation():
+    assert AudioTranscriber._is_usable("...嗯...")
+    assert AudioTranscriber._is_usable("?!a")

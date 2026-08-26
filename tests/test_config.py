@@ -73,3 +73,21 @@ def test_capture_dependencies_are_platform_split():
     pyproject = (root / "pyproject.toml").read_text()
     assert "PyAudioWPatch; sys_platform == 'win32'" in pyproject
     assert "sounddevice; sys_platform != 'win32'" in pyproject
+
+
+def test_the_speaker_embedder_gets_a_real_device_not_a_word():
+    """
+    Regression: shipping conf.yaml with device "auto" broke diarization.
+
+    Two ASR call sites were routed through resolve_device() when "auto" was
+    introduced; the speaker embedder's was missed and got the raw string.
+    torch rejects "auto", the embedder failed to load, and diarization then
+    produced no labels at all -- silently, looking like a model that could not
+    tell voices apart rather than one that never started.
+    """
+    import torch
+    from src.AudioTranscriber import _asr_device
+
+    device = _asr_device()
+    assert device != "auto", "must be resolved before torch ever sees it"
+    torch.device(device)          # raises if it is not a real device name

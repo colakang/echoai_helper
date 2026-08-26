@@ -51,6 +51,48 @@ def list_input_devices() -> List[dict]:
     return devices
 
 
+def a_microphone_exists() -> bool:
+    """
+    Whether the system currently has a real microphone, asked of CoreAudio.
+
+    Deliberately not asked of PortAudio. PortAudio enumerates devices once at
+    Pa_Initialize and never again, so inside a running process its answer is
+    frozen at whatever was true at startup -- it cannot see a headset leave and
+    it cannot see one come back. CoreAudio answers live, and answering this
+    cheaply is what keeps the far-end recording from being torn down every
+    thirty seconds while a headset sits switched off in a drawer.
+    """
+    try:
+        from . import coreaudio
+        return any(getattr(d, "input_channels", 0) > 0
+                   and not _looks_like_loopback(d.name)
+                   for d in coreaudio.list_devices())
+    except Exception:
+        # Unknowable rather than false: claiming there is no microphone would
+        # stop recovery from ever being attempted.
+        return True
+
+
+def preferred_mic() -> Optional[dict]:
+    """
+    The device the microphone track should be on *right now*.
+
+    Same rule create_mic_recorder() uses at startup -- the system default input
+    if it is a real microphone, otherwise the first one -- but evaluated
+    against the current device list rather than the one that existed when the
+    app launched.
+    """
+    candidates = [d for d in list_input_devices() if not d["is_loopback"]]
+    if not candidates:
+        return None
+    try:
+        default_in = sd.default.device[0]
+    except Exception:
+        default_in = None
+    return next((c for c in candidates if c["index"] == default_in),
+                candidates[0])
+
+
 class SoundDeviceRecorder(Recorder):
     """
     Streams from one input device, emitting fixed ~0.6s int16 PCM chunks.
@@ -63,6 +105,12 @@ class SoundDeviceRecorder(Recorder):
     def __init__(self, source: AudioSource, source_name: str, device_index: int):
         super().__init__(source, source_name)
         self.device_index = device_index
+        # The name is the identity; the index is only a handle to it.
+        # PortAudio renumbers devices whenever the list changes, so an index
+        # captured at launch can quietly come to mean a different device --
+        # which is what a Bluetooth headset handing its microphone to a phone
+        # does to us. Keeping the name is what makes that detectable.
+        self.device_name = source.device_name
         self._stream: Optional[sd.InputStream] = None
         self._queue: Optional[_queue.Queue] = None
         self._buffer = bytearray()
@@ -76,6 +124,7 @@ class SoundDeviceRecorder(Recorder):
         self._queue = audio_queue
 
         def callback(indata, frames, time_info, status):
+            self.note_callback()
             if status:
                 # Overflows are normal under load; log once per occurrence
                 # rather than raising, so a hiccup never kills capture.
@@ -100,7 +149,7 @@ class SoundDeviceRecorder(Recorder):
               f"({self.source.SAMPLE_RATE}Hz, {self.source.channels}ch)")
 
     def _emit(self, chunk: bytes) -> None:
-        if not chunk:
+        if not chunk or not self.should_emit():
             return
         # utcnow() is deprecated in 3.12; keep the naive-UTC value the rest of
         # the pipeline already assumes.
@@ -109,8 +158,13 @@ class SoundDeviceRecorder(Recorder):
 
     def stop(self) -> None:
         if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception as exc:
+                # A device that has already gone raises on close. Nothing left
+                # to release, and refusing to move on would strand the track.
+                print(f"[WARN] {self.source_name}: closing the stream failed: {exc}")
             self._stream = None
             print(f"[INFO] {self.source_name}: capture stopped")
 
@@ -166,3 +220,48 @@ class MacOSAudioBackend(AudioBackend):
             return None
 
         return self._build(loopbacks[0]["index"], "Speaker")
+
+    def restart_capture(self, recorders, queues):
+        """
+        Rebuild every capture stream after a device came back.
+
+        Measured, because none of it is guessable from the API:
+
+        - Reopening the dead stream on its remembered index fails with
+          PaErrorCode -9986 *even once the device is genuinely back*. Whatever
+          PortAudio cached for that device is poisoned by the disconnect.
+        - Only Pa_Terminate followed by Pa_Initialize recovers it -- and that
+          invalidates every open stream in the process, so the far-end track
+          has to be torn down and rebuilt too, whether or not anything was
+          wrong with it.
+        - The whole cycle costs 378ms (median of 3, tight spread). That is the
+          gap punched in the meeting recording, and it buys back a microphone
+          track that would otherwise be dead for the rest of the call.
+
+        Returns the replacement recorders, keyed as they came in. A track whose
+        device did not come back maps to None rather than raising: losing your
+        own microphone must not also stop the meeting being recorded.
+        """
+        for recorder in recorders.values():
+            if recorder is not None:
+                recorder.stop()
+
+        sd._terminate()
+        sd._initialize()
+
+        rebuilt = {}
+        for name, recorder in recorders.items():
+            if recorder is None:
+                rebuilt[name] = None
+                continue
+            wanted = (preferred_mic() if name == Recorder.PAUSABLE
+                      else next((d for d in list_input_devices()
+                                 if d["is_loopback"]), None))
+            if wanted is None:
+                print(f"[WARN] {name}: no device to capture from after the restart")
+                rebuilt[name] = None
+                continue
+            replacement = self._build(wanted["index"], name)
+            replacement.record_into_queue(queues[name])
+            rebuilt[name] = replacement
+        return rebuilt

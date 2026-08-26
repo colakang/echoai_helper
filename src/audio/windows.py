@@ -49,6 +49,9 @@ class SpeechRecognitionRecorder(Recorder):
 
     def record_into_queue(self, audio_queue: "_queue.Queue") -> None:
         def record_callback(_, audio) -> None:
+            self.note_callback()
+            if not self.should_emit():
+                return
             data = audio.get_raw_data()
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             audio_queue.put((self.source_name, data, now))

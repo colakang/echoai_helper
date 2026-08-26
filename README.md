@@ -42,6 +42,12 @@ language model to clean up the finished transcript.
   the surrounding conversation, through an API key or through a coding-agent CLI
   on a subscription you already pay for
 - **Markdown and JSON export** — Markdown to read, JSON as a complete record
+- **Noise kept out of the transcript** — room noise that reaches the model comes
+  back as a bare "."; 169 of 1312 lines in one real meeting, now dropped
+- **Pause your own track** — muting yourself in the meeting app does not reach
+  this one, and pausing roughly halves the model's work
+- **Recovers a lost microphone** — a Bluetooth headset that drops out is
+  detected and capture is rebuilt, rather than silently recording nothing
 - **Live reply suggestions** — for interviews, where a prompt is wanted while the
   other person is still talking
 
@@ -124,8 +130,9 @@ transcript exported afterwards — not a smoke test. The longest was 84 minutes
 and 1311 lines.
 
 The Mac mini has no built-in microphone, so the microphone track has only been
-exercised through a Bluetooth headset and a wired input. That is also where the
-[Bluetooth limitation](#-known-limitations) below was found.
+exercised through a Bluetooth headset and a wired input. Disconnecting and
+reconnecting that headset mid-recording is tested, because that is how the
+microphone was found to die silently in the first place.
 
 If you run it somewhere not on this list, an issue saying so — working or
 not — is genuinely useful.
@@ -149,7 +156,8 @@ ships tkinter, so there is no separate Tk step.
 
 1. Open the app. If audio routing is not in place, it offers to finish it.
 2. Pick a mode, and set the number of people if you know it.
-3. Hold your meeting. Nothing needs touching.
+3. Hold your meeting. Nothing needs touching — though **Pause Mic** is there for
+   the stretches you are muted anyway, and it roughly halves the model's work.
 4. **Export** — one dialog covers format, cleanup, which model to clean with,
    and merging over-split speakers.
 
@@ -231,9 +239,21 @@ echoai-helper setup --status        # what routing is in place
 and remembers them. Set its speaker to `EchoAI Meeting`.
 
 **Nothing from the microphone over Bluetooth.** A Bluetooth headset can only send
-its microphone to one device. If it is on a phone call, the Mac gets silence —
-and the stream does not recover on its own; restart the app. A USB microphone
-avoids this entirely.
+its microphone to one device; if it is on a phone call, the Mac gets silence.
+This now recovers on its own: the app notices within about five seconds that the
+device has stopped delivering, waits without touching anything while no
+microphone is available, and rebuilds capture as soon as one is. You will see it
+in the log:
+
+```
+[WARN] You: no audio for 31s — the device is gone. Rebuilding capture.
+[INFO] You: capture restored on 'Your Headset'
+```
+
+**You are muted in the meeting but still being transcribed.** Expected — muting
+in Zoom or WeChat silences your outgoing audio, not this app's own input stream.
+Use **Pause Mic**. It resets to off every launch, deliberately: a pause that
+survived a restart would look like recording and not be.
 
 **More speakers than people.** Voice prints drift with volume and connection
 quality, so one person can end up split across several labels. Set the number of
@@ -248,8 +268,9 @@ prints, so this works after the fact.
 git clone https://github.com/colakang/echoai_helper.git
 cd echoai_helper
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r requirements-macos.txt   # or requirements.txt
+uv pip install --python .venv/bin/python -e .
 .venv/bin/python -m pytest tests/ -q
+.venv/bin/python main.py            # run from the checkout
 ```
 
 [`docs/macos-audio-setup.md`](docs/macos-audio-setup.md) covers the audio
@@ -259,9 +280,11 @@ routing, what has been measured, and where the sharp edges are.
 
 ## 📝 Known limitations
 
-- **A dead microphone stream does not recover.** Seen on a real call: capture
-  stops silently and the app looks like it is still working. Restarting fixes it.
-  This is the most consequential item on the list.
+- **Recovering the microphone interrupts the meeting audio for ~0.4s.** When a
+  device dies, PortAudio can only be recovered by restarting it, which
+  invalidates every open stream — so the far-end track is rebuilt too, whether
+  or not anything was wrong with it. Measured at 378ms. It buys back a
+  microphone track that would otherwise be dead for the rest of the call.
 - **Speaker labelling is tuned against a clean two-party recording** and
   over-splits on group calls over a lossy connection. Merging at export is the
   workaround, not the cure.

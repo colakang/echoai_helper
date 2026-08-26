@@ -193,6 +193,10 @@ def _restore_on_exit(root):
     guessing: someone listening through an external monitor should not end up
     on the built-in speakers.
     """
+    # First, so the heartbeat cannot see the closing streams as a dead device
+    # and start rebuilding audio underneath a window that is going away.
+    _shutting_down.set()
+
     try:
         session = getattr(_restore_on_exit, "session", None)
         if session is not None:
@@ -757,6 +761,42 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     )
     diarize_checkbox.pack(side="left", padx=(0, 5))
 
+    # Stop transcribing your own microphone.
+    #
+    # Muting yourself in the meeting app does not reach us: we hold our own
+    # input stream, and Zoom or WeChat silencing your outgoing audio changes
+    # nothing about what CoreAudio hands this process. A meeting spent muted
+    # still fills your side of the transcript with the room you are sitting in.
+    #
+    # It also buys real-time headroom, because the measured real-time factor is
+    # a dual-track figure: dropping one track roughly halves the model's work.
+    # Deliberately NOT persisted, unlike the settings either side of it.
+    #
+    # Pausing is something you do during a meeting, not a preference. Carrying
+    # it across a restart means launching into a session that looks like it is
+    # recording you and is not -- which is precisely the failure this whole
+    # area exists to remove, rebuilt in a nicer shape. Every launch starts
+    # listening.
+    mic_paused_var = ctk.BooleanVar(value=False)
+    AudioConfig.set_mic_paused(False)
+
+    def toggle_mic_paused():
+        paused = mic_paused_var.get()
+        AudioConfig.set_mic_paused(paused)
+        print(f"[INFO] Microphone track {'paused' if paused else 'resumed'}")
+
+    mic_pause_checkbox = ctk.CTkCheckBox(
+        controls_frame,
+        text="Pause Mic",
+        variable=mic_paused_var,
+        command=toggle_mic_paused,
+        width=95,
+        height=button_height,
+        checkbox_width=16,
+        checkbox_height=16,
+    )
+    mic_pause_checkbox.pack(side="left", padx=(0, 5))
+
     # How many people are on the call. Voice embeddings drift with volume,
     # codec and network conditions, so left to itself the clustering splits
     # one person into several -- a real call produced 12 speakers, exactly the
@@ -863,6 +903,120 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         "pause_dropdown": pause_dropdown,
     }
 
+# Seconds of no audio callback before the microphone is considered gone.
+#
+# Not a sensitivity dial. On a real Bluetooth disconnect the callback stops
+# being invoked at all, so any value comfortably above the callback interval
+# (~20ms) gives the same answer; this one is chosen to ride out a scheduling
+# hiccup without making the user wait.
+MIC_DEAD_AFTER_SECONDS = 5.0
+MIC_HEARTBEAT_POLL_SECONDS = 1.0
+
+# Set before the app tears its own streams down, so the heartbeat cannot
+# mistake an orderly shutdown for a dead device and start rebuilding audio
+# underneath a closing window.
+_shutting_down = threading.Event()
+
+
+def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
+    """
+    Notice when the microphone stops delivering, and put it back.
+
+    The failure this exists for was measured rather than guessed. A Bluetooth
+    headset handing its microphone to a phone produces: one line of PortAudio
+    debug output on stderr that no Python code can catch, no exception, no
+    callback status flag, and no change to the device list the process can
+    see -- PortAudio enumerates once at startup and never again. The stream
+    stays open and the app keeps looking like it is recording. Reconnecting
+    the headset does not bring it back.
+
+    What *does* change is that the callback stops being invoked. That is the
+    signal used here, and it is unambiguous in the way nothing else was:
+
+        device gone   -> callback stops entirely (0 in 2s, measured)
+        muted / paused-> callback keeps firing, delivering zeroes
+        nobody talking-> callback keeps firing, delivering room noise
+
+    So counting invocations separates the case that needs fixing from the two
+    that must be left alone, with no threshold over the signal itself.
+    """
+    if not hasattr(backend, "restart_capture"):
+        return          # Windows: WASAPI holds its own device handle
+
+    state = {"recorders": dict(recorders), "backoff": 0.0}
+
+    def watch():
+        while not _shutting_down.is_set():
+            time.sleep(MIC_HEARTBEAT_POLL_SECONDS)
+            if _shutting_down.is_set():
+                return
+
+            mic = state["recorders"].get("You")
+
+            # None is not "nothing to do" -- it is the state most in need of
+            # doing something. It means a previous rebuild found no device,
+            # and treating it as uninteresting is how the heartbeat silently
+            # stops retrying for the rest of the meeting.
+            if mic is not None and mic.silent_for() < MIC_DEAD_AFTER_SECONDS:
+                continue
+            if time.monotonic() < state["backoff"]:
+                continue
+
+            # Cheap question first, asked of CoreAudio rather than PortAudio,
+            # because the expensive answer costs the meeting. Rebuilding tears
+            # down every stream in the process -- the far-end track included --
+            # so doing it to discover the headset is still switched off punches
+            # a 378ms hole in the recording for nothing, once every retry.
+            from src.audio.macos import a_microphone_exists
+            if not a_microphone_exists():
+                continue
+
+            if mic is None:
+                print("[INFO] You: a microphone is available again — "
+                      "rebuilding capture.")
+            else:
+                print(f"[WARN] You: no audio for {mic.silent_for():.0f}s — "
+                      f"the device is gone. Rebuilding capture.")
+            try:
+                if _shutting_down.is_set():
+                    return
+                state["recorders"] = backend.restart_capture(
+                    state["recorders"], queues)
+                rebuilt = state["recorders"].get("You")
+                if rebuilt is None:
+                    # CoreAudio said there was a microphone and PortAudio could
+                    # not open it. Back off so a device stuck half-present does
+                    # not rebuild the audio stack on every pass.
+                    state["backoff"] = time.monotonic() + 30
+                    print("[WARN] You: could not open a microphone — "
+                          "retrying in 30s")
+                else:
+                    print(f"[INFO] You: capture restored on "
+                          f"{rebuilt.source.device_name!r}")
+                    if on_rebuilt is not None:
+                        on_rebuilt(rebuilt)
+            except Exception as exc:
+                # Never fatal. A failed recovery is bad; taking the meeting
+                # down with it would be worse.
+                state["backoff"] = time.monotonic() + 30
+                print(f"[WARN] could not rebuild capture: {exc}")
+
+    # Three ways this process ends, and the thread has to stop for all of them:
+    #
+    #   the window is closed -> _restore_on_exit sets the event, above;
+    #   an unhandled exception, SIGTERM, sys.exit -> atexit runs, below;
+    #   SIGKILL or a hard crash -> nothing runs, and the daemon flag is what
+    #       matters: a daemon thread cannot hold the process open.
+    #
+    # The event is not merely tidiness. Without it, closing the window stops
+    # the streams, the heartbeat sees no callbacks, and it starts rebuilding
+    # audio devices underneath a window that is already going away.
+    import atexit
+    atexit.register(_shutting_down.set)
+
+    threading.Thread(target=watch, daemon=True, name="mic-heartbeat").start()
+
+
 def main():
     try:
         # 初始化环境配置
@@ -901,8 +1055,9 @@ def main():
 
     if user_audio_recorder is None and speaker_audio_recorder is None:
         print("ERROR: No audio input available. Run "
-              "`python scripts/check_audio.py` to diagnose.")
+              "`echoai-helper check-audio` to diagnose.")
         return
+
 
     model = TranscriberModels.get_model('--api' in sys.argv)
 
@@ -933,6 +1088,24 @@ def main():
         speaker_transcribe = threading.Thread(target=transcriber.transcribe_audio_queue, args=(speaker_queue,), name="SpeakerTranscriber")
         speaker_transcribe.daemon = True
         speaker_transcribe.start()
+
+    # Keep the microphone track on the device actually in use, and pick one up
+    # if it appears after launch -- the normal case on a machine with no
+    # built-in microphone, where somebody attaches a headset once the meeting
+    # has started.
+    def _mic_rebuilt(rec):
+        # The track may not exist yet: a machine with no built-in microphone
+        # starts without one, and this is how it acquires one mid-meeting.
+        if transcriber.attach_source("You", rec.source):
+            threading.Thread(target=transcriber.transcribe_audio_queue,
+                             args=(mic_queue,), name="MicTranscriber",
+                             daemon=True).start()
+
+    _start_mic_heartbeat(
+        backend,
+        {"You": user_audio_recorder, "Speaker": speaker_audio_recorder},
+        {"You": mic_queue, "Speaker": speaker_queue},
+        on_rebuilt=_mic_rebuilt)
 
     responder = GPTResponder(response_manager)
     respond = threading.Thread(target=responder.respond_to_transcriber, args=(transcriber,))
