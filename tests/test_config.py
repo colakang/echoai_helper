@@ -91,3 +91,39 @@ def test_the_speaker_embedder_gets_a_real_device_not_a_word():
     device = _asr_device()
     assert device != "auto", "must be resolved before torch ever sees it"
     torch.device(device)          # raises if it is not a real device name
+
+
+def test_python_support_covers_312_and_313():
+    """
+    3.12 alone was too narrow: the Python most people have is neither, so
+    every install went through uv fetching one. 3.13 works once the two
+    standard-library removals are backported.
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'requires-python = ">=3.12,<3.14"' in pyproject
+
+
+def test_the_backports_are_only_installed_where_they_are_missing():
+    """
+    aifc and audioop are in the standard library up to 3.12. Depending on the
+    backports unconditionally would install a shim over the real thing.
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    for package in ("audioop-lts", "standard-aifc"):
+        assert f"\"{package}; python_version >= '3.13'\"" in pyproject
+
+
+def test_the_upper_bound_is_explained():
+    """
+    It is onnxruntime, not this project: no macOS arm64 wheel for 3.14, so the
+    stack does not resolve there. Worth stating, or the next person widens it
+    and finds out the slow way.
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert "onnxruntime" in pyproject.split("requires-python")[1][:900]

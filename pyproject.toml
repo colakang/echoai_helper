@@ -4,17 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "echoai-helper"
-version = "1.4.0"
+version = "1.4.1"
 description = "Real-time meeting transcription and interview assistance, on-device"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.14"
 authors = [{ name = "colakang" }]
 keywords = ["transcription", "asr", "meeting-notes", "diarization", "funasr"]
 
-# Pinned to 3.12 deliberately, not out of caution: the vendored
-# src/custom_speech_recognition imports aifc and audioop at module level, and
-# both were removed from the standard library in 3.13.
+# 3.12 or 3.13. Not wider, and the reason is onnxruntime rather than anything
+# here: it publishes no macOS arm64 wheel for 3.14, so the stack does not
+# resolve there at all.
+#
+# 3.13 was excluded until now because the vendored src/custom_speech_recognition
+# imports aifc and audioop, both removed from the standard library in 3.13.
+# Two things make that surmountable. On macOS the module is never imported --
+# verified at runtime, the capture path defers it and only the Windows backend
+# reaches it. And where it is reached, the standard backports supply both,
+# which is what the conditional dependencies below are for.
 
 dependencies = [
     # Capture is platform-split. macOS records system output through a
@@ -24,6 +31,11 @@ dependencies = [
     # platform that cannot have the other.
     "sounddevice; sys_platform != 'win32'",
     "PyAudioWPatch; sys_platform == 'win32'",
+    # Removed from the standard library in 3.13, and imported by the vendored
+    # speech-recognition module that the Windows capture path uses. Installed
+    # only where they are missing, so a 3.12 install carries neither.
+    "audioop-lts; python_version >= '3.13'",
+    "standard-aifc; python_version >= '3.13'",
     "numpy<2",                # funasr and torch still assume the 1.x ABI
     "scipy",
     "torch",
