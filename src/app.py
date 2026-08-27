@@ -709,6 +709,15 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         elif text == "Pop Up":
             freeze_button = btn
 
+    # Says how the button above is driven. Selecting text in a pane that has
+    # spent its life looking like a list of clickable rows is not a guessable
+    # interaction, and it is the only way to reach the on-demand answer.
+    ctk.CTkLabel(
+        main_control_frame,
+        text="drag across the turns, then Answer",
+        font=("Arial", 9), text_color="#8a8a8a"
+    ).grid(row=len(buttons_data), column=1, padx=5, pady=(0, 2))
+
     # 创建TranscriptUI实例
     transcript_ui = TranscriptUI(transcript_textbox, response_manager)
     transcript_ui.add_click_handler(response_textbox)

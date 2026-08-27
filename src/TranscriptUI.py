@@ -67,7 +67,12 @@ class TranscriptUI:
 
     def _configure_textbox(self) -> None:
         """配置文本框的基本设置"""
-        self.textbox.configure(cursor="hand2")
+        # An I-beam, not a pointing hand. The hand said "click me", which is
+        # how the transcript reads as a list of clickable rows rather than as
+        # text you can drag across -- and dragging across it is how a passage
+        # gets chosen to be answered. Clicking a line still works; the cursor
+        # simply stops hiding the other half of what the widget does.
+        self.textbox.configure(cursor="xterm")
         self.text_widget.configure(state="normal")  # 确保文本可以选择
 
         # exportselection defaults on, which hands the highlight to the system

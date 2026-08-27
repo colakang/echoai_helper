@@ -651,3 +651,25 @@ def test_the_remembered_selection_is_text_not_a_position():
     body = inspect.getsource(TranscriptUI._remember_selection)
     assert 'get("sel.first", "sel.last")' in body
     assert "_last_selection = text" in body
+
+
+def test_the_transcript_looks_selectable():
+    """
+    It carried a pointing-hand cursor, which says "click me". That is half of
+    what the pane does and hides the half that matters here: dragging across
+    turns is the only way to reach the on-demand answer, and nobody drags
+    across something that presents itself as a list of buttons.
+    """
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI._configure_textbox)
+    assert 'cursor="xterm"' in body
+    assert 'cursor="hand2"' not in body
+
+
+def test_the_interaction_is_written_down_next_to_the_button():
+    """Not a guessable one, and there is nothing else that reveals it."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    assert "drag across the turns" in body
