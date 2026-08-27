@@ -843,14 +843,14 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
     diarize_var = tk.BooleanVar(value=settings_manager.get_setting("diarization"))
 
     def toggle_diarization():
+        # Shows or hides the labels. The voice prints behind them are taken
+        # regardless, so switching this on mid-meeting starts labelling from
+        # what has already been clustered rather than from an empty slate --
+        # and switching it off does not throw away the ability to sort the
+        # speakers out at export.
         enabled = diarize_var.get()
         AudioConfig.set_diarization(enabled)
         settings_manager.update_setting("diarization", enabled)
-        if enabled:
-            # Warm it here rather than inside the next utterance, where the
-            # load would stall transcription for 20s or more.
-            threading.Thread(target=transcriber.preload_speaker_model,
-                             daemon=True).start()
 
     diarize_checkbox = ctk.CTkCheckBox(
         controls_frame,
@@ -1261,12 +1261,16 @@ def main():
     SystemConfig.set_record_only_mode(settings_manager.get_setting("record_only_mode"))
     AudioConfig.set_diarization(settings_manager.get_setting("diarization"))
     AudioConfig.set_speaker_count(settings_manager.get_setting("speaker_count"))
-    if AudioConfig.get_diarization():
-        # Off the main thread: loading it costs ~20s the first time, and the
-        # UI should come up regardless. Segments transcribe unlabelled until
-        # it is ready rather than waiting for it.
-        threading.Thread(target=transcriber.preload_speaker_model,
-                         daemon=True).start()
+    # Loaded whether or not labels are being shown, because the voice prints
+    # are recorded either way -- they are the only thing that makes a meeting's
+    # speakers recoverable afterwards, and a meeting held without them cannot
+    # be repaired later no matter what is learned.
+    #
+    # Off the main thread: loading costs ~20s the first time, and the UI should
+    # come up regardless. Segments transcribe without prints until it is ready
+    # rather than waiting for it.
+    threading.Thread(target=transcriber.preload_speaker_model,
+                     daemon=True).start()
 
     # Apply the saved transcription profile before the first chunk arrives.
     saved_profile = profiles.by_key(settings_manager.get_setting("profile"))

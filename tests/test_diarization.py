@@ -325,3 +325,54 @@ def test_it_agrees_with_the_language_threshold():
     """
     from src.AudioTranscriber import LANGUAGE_TRUST_S
     assert DiarizationConfig().min_duration_s == LANGUAGE_TRUST_S
+
+
+# --------------------------------------------------------------------------
+# The Speakers setting shows labels; it does not decide what is recorded
+# --------------------------------------------------------------------------
+#
+# These used to be one switch, and that was a trap. Turning Speakers off read
+# as "do not show me labels" and silently also meant "record nothing that
+# could ever produce them" -- so a meeting held with it off could never have
+# its speakers recovered, no matter what was learned later. Over-splitting is
+# not solved, and re-clustering at export is the only remedy there is.
+
+def test_voice_prints_are_taken_even_with_labels_off():
+    import inspect
+    from src import AudioTranscriber as module
+    body = inspect.getsource(module.AudioTranscriber._identify_speaker)
+
+    stores = body.index("self._last_embedding = embedding")
+    gate = body.index("if not _labels_wanted():")
+    assert stores < gate, "the print must be kept before labels are considered"
+
+
+def test_the_setting_no_longer_short_circuits_the_whole_function():
+    """The first thing it did was return None, which is what lost the prints."""
+    import inspect
+    from src import AudioTranscriber as module
+    body = inspect.getsource(module.AudioTranscriber._identify_speaker)
+    head = body.split("if who_spoke.lower()", 1)[0]
+    assert "get_diarization()" not in head
+
+
+def test_the_embedder_loads_regardless_of_the_setting():
+    """
+    Without this the separation is decorative: nothing is embedded because the
+    model was never loaded, and the session ends up with no prints anyway.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    call = body.index("preload_speaker_model")
+    preceding = body[:call].rsplit("\n", 6)[-1]
+    assert "get_diarization" not in preceding
+
+
+def test_toggling_it_does_not_reload_anything():
+    """It is a display setting now; the model is already up."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    handler = body.split("def toggle_diarization", 1)[1][:700]
+    assert "preload_speaker_model" not in handler

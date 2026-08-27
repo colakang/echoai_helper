@@ -53,6 +53,11 @@ def _vad_model_path() -> str:
 # trust: measured misdetections at 0.7-1.7s, none above ~2s.
 LANGUAGE_TRUST_S = 2.0
 
+
+def _labels_wanted() -> bool:
+    """Whether speaker labels should be shown. Voice prints are taken either way."""
+    return AudioConfig.get_diarization()
+
 PHRASE_TIMEOUT = 5.2
 MAX_PHRASE_TIMEOUT = 30.2
 MAX_PHRASES = 9999
@@ -342,12 +347,22 @@ class AudioTranscriber:
         """
         Which of the voices on this track just spoke, or None.
 
-        Only the far-end track is worth splitting: "You" is a single person
-        by construction, and running this on it would spend an embedding per
+        Only the far-end track is worth splitting: "You" is a single person by
+        construction, and running this on it would spend an embedding per
         segment to rediscover that.
+
+        The Speakers setting decides whether a *label* is returned. It does not
+        decide whether the voice print is taken: that happens either way, and
+        is written to the session.
+
+        The two used to be the same switch, and that was a trap. Turning
+        Speakers off read as "do not show me labels" and silently also meant
+        "record nothing that could ever produce them" -- so a meeting held with
+        it off can never have its speakers recovered afterwards, no matter what
+        is known later. Over-splitting is not solved, and re-clustering at
+        export is the only remedy there is; making it unavailable should not be
+        a side effect of a checkbox about display.
         """
-        if not AudioConfig.get_diarization():
-            return None
         if who_spoke.lower() != "speaker":
             return None
 
@@ -368,7 +383,7 @@ class AudioTranscriber:
             # alternative -- no label at all -- loses information the reader
             # could have used. Same reasoning as the language stickiness
             # above, for the same reason.
-            return self._recent_speaker(who_spoke)
+            return self._recent_speaker(who_spoke) if _labels_wanted() else None
 
         if not self._embedder.ready:
             # Never block the transcription thread on a model load. The
@@ -381,13 +396,23 @@ class AudioTranscriber:
         if embedding is None:
             return None
 
+        # Kept whatever the Speakers setting says, so the export can re-cluster
+        # this meeting later.
+        self._last_embedding = embedding
+
         result = self._registries[who_spoke].assign(embedding)
         if result.speaker is None:
-            return self._recent_speaker(who_spoke)
+            return self._recent_speaker(who_spoke) if _labels_wanted() else None
 
         if result.confident:
             self._last_confident[who_spoke] = (result.label, time.monotonic())
-        self._last_embedding = embedding
+
+        if not _labels_wanted():
+            # Clustered and recorded; simply not shown. Keeping the registry
+            # up to date means switching Speakers on mid-meeting starts
+            # labelling immediately rather than from an empty slate.
+            return None
+
         # A blended segment -- two voices with no pause between them -- is
         # marked rather than presented as certain.
         return result.label if result.confident else f"{result.label}?"
