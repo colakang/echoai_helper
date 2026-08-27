@@ -362,8 +362,13 @@ class GPTResponder:
         answering "嗯" and "好的", which is a guess about intent -- and there is
         nothing to guess about when someone has selected the text and asked.
         """
-        passage = _utterance_only((passage or "").strip())
-        if not passage:
+        # Emptiness is asked of the words, not of the rewritten form. Running
+        # the rewrite here as well applied it twice -- the second pass no
+        # longer recognises "Speaker 1: hello" as an attributed line and
+        # attributes it again, producing "Speaker: Speaker 1: hello". The
+        # rewrite belongs in _answer, which is the one path both callers share.
+        passage = (passage or "").strip()
+        if not _spoken_words(passage).strip():
             return False
 
         def run():

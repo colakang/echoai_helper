@@ -301,3 +301,19 @@ def test_it_is_measured_before_the_attribution_is_added():
     body = inspect.getsource(GPTResponder._answer)
     assert (body.index("_spoken_words(question_text)")
             < body.index("question_text = _utterance_only(question_text)"))
+
+
+def test_the_rewrite_is_applied_exactly_once():
+    """
+    answer_passage used to run it too, for an emptiness check, and _answer
+    runs it again. The second pass does not recognise "Speaker 1: hello" as an
+    already-attributed line, so it attributed it again and the model received
+    "Speaker: Speaker 1: hello".
+
+    Emptiness is asked of the words instead, which changes nothing.
+    """
+    import inspect
+    from src.GPTResponder import GPTResponder
+    body = inspect.getsource(GPTResponder.answer_passage)
+    assert "_utterance_only(" not in body
+    assert "_spoken_words(" in body
