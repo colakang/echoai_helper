@@ -72,8 +72,16 @@ https://github.com/user-attachments/assets/0d627e4a-960b-4628-8bbc-8d892f02cfd1
 
 ### macOS
 
+If you do not have `uv`:
+
 ```bash
-uv tool install echoai-helper     # uv brings its own Python 3.12
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then:
+
+```bash
+uv tool install echoai-helper     # uv fetches a suitable Python itself
 echoai-helper setup               # audio routing — one password prompt
 echoai-helper install-launcher    # adds an icon to Launchpad
 ```
@@ -104,6 +112,7 @@ that needs a password.
 ### Windows
 
 ```powershell
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"    # if you need uv
 uv tool install echoai-helper
 echoai-helper
 ```
@@ -143,12 +152,29 @@ not — is genuinely useful.
 Speech models (~1.5GB) download on first launch. Nothing else is needed.
 
 <details>
-<summary>Why Python 3.12 specifically</summary>
+<summary>Why <code>uv</code> rather than <code>pip</code></summary>
 
-Not caution. The vendored `src/custom_speech_recognition` imports `aifc` and
-`audioop` at module level, and **both were removed from the standard library in
-Python 3.13**. `uv` installs a suitable interpreter itself, and its 3.12 build
-ships tkinter, so there is no separate Tk step.
+Because this needs Python 3.12 or 3.13, and the Python you have is probably
+neither. macOS ships 3.9; Homebrew currently installs 3.14. `uv` fetches a
+suitable interpreter itself, and its builds include tkinter, so there is no
+separate Tk step either.
+
+**If you try `pip install echoai-helper` on the wrong version** you get:
+
+```
+ERROR: Could not find a version that satisfies the requirement echoai-helper
+       (from versions: none)
+ERROR: No matching distribution found for echoai-helper
+```
+
+which reads as "no such package". It means "not for this Python". Nothing is
+wrong with the name.
+
+The upper bound is onnxruntime, which publishes no macOS arm64 wheel for 3.14.
+The lower one is the vendored `src/custom_speech_recognition`, which imports
+`aifc` and `audioop` — removed from the standard library in 3.13, and supplied
+by backports that install only when they are missing.
+
 </details>
 
 ---
