@@ -74,7 +74,29 @@ class DiarizationConfig:
 
     # Voices shorter than this give unreliable embeddings, the same way they
     # give unreliable language detection.
-    min_duration_s: float = 1.0
+    #
+    # Measured, because the value that was here before was not. Cutting two
+    # single-speaker recordings into windows and comparing each against that
+    # speaker's own full-length print:
+    #
+    #     window   mean    p10
+    #      0.5s    0.342   0.064
+    #      1.0s    0.480   0.336     <- the old gate
+    #      1.5s    0.624   0.486
+    #      2.0s    0.721   0.636     <- first duration whose p10 clears 0.62
+    #      3.0s    0.713   0.635
+    #
+    # At one second a speaker matches themselves at 0.480, against a
+    # same-speaker threshold of 0.62 and a cross-speaker range of 0.21-0.50.
+    # A person did not resemble themselves more than they resembled someone
+    # else, so the gate was admitting embeddings indistinguishable from noise
+    # -- which is exactly how one caller reading a number became three
+    # speakers.
+    #
+    # 2.0 is where the curve flattens, and is the same figure LANGUAGE_TRUST_S
+    # arrived at independently for the same underlying problem: too little
+    # audio to tell anything from.
+    min_duration_s: float = 2.0
 
     # A meeting has a bounded number of people; without a cap, noise and
     # crosstalk invent a new speaker every few segments.

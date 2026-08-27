@@ -7,6 +7,7 @@ these tests pin down actually lived.
 """
 
 import os
+import time
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -359,3 +360,50 @@ def test_real_speech_survives_in_every_language_this_transcribes():
 def test_a_line_is_kept_even_when_mostly_punctuation():
     assert AudioTranscriber._is_usable("...嗯...")
     assert AudioTranscriber._is_usable("?!a")
+
+
+# --------------------------------------------------------------------------
+# Inheriting a speaker across segments too short to identify
+# --------------------------------------------------------------------------
+#
+# Below the duration gate there is no usable voice print, so the choice is
+# between the previous speaker and no label at all. This codebase already
+# holds that merging two speakers beats inventing one -- a reader can see a
+# wrong turn boundary and cannot recover a speaker who never existed -- and
+# the same reasoning applies here.
+
+def test_a_short_segment_inherits_the_last_confident_speaker():
+    transcriber = make_transcriber(speaker=FakeSource())
+    transcriber._last_confident["Speaker"] = ("S1", time.monotonic())
+    assert transcriber._recent_speaker("Speaker") == "S1"
+
+
+def test_nothing_is_inherited_before_anyone_has_been_identified():
+    transcriber = make_transcriber(speaker=FakeSource())
+    assert transcriber._recent_speaker("Speaker") is None
+
+
+def test_the_memory_expires():
+    """
+    Inheriting across a long silence stops being a guess about this
+    conversation and becomes a guess about a different one.
+    """
+    transcriber = make_transcriber(speaker=FakeSource())
+    stale = time.monotonic() - transcriber.SPEAKER_MEMORY_S - 1
+    transcriber._last_confident["Speaker"] = ("S1", stale)
+    assert transcriber._recent_speaker("Speaker") is None
+
+
+def test_the_memory_is_per_track():
+    """"You" and the far end are different people by construction."""
+    transcriber = make_transcriber(mic=FakeSource(), speaker=FakeSource())
+    transcriber._last_confident["Speaker"] = ("S2", time.monotonic())
+    assert transcriber._recent_speaker("You") is None
+
+
+def test_clearing_the_transcript_forgets_the_speaker():
+    """Or a new meeting inherits someone from the one just discarded."""
+    transcriber = make_transcriber(speaker=FakeSource())
+    transcriber._last_confident["Speaker"] = ("S1", time.monotonic())
+    transcriber.clear_transcript_data()
+    assert transcriber._recent_speaker("Speaker") is None
