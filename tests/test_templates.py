@@ -598,3 +598,56 @@ def test_the_import_buttons_do_not_sit_on_the_action_buttons():
     body = inspect.getsource(app.create_ui_components)
     assert 'import_button.grid(row=row, column=0' in body
     assert 'btn.grid(row=i, column=1' in body
+
+
+# --------------------------------------------------------------------------
+# Reading and selecting while the transcript keeps arriving
+# --------------------------------------------------------------------------
+#
+# A meeting appends continuously. Two things made that hostile to the one
+# interaction that matters here -- highlighting a passage in order to answer
+# it -- and both were in the update path rather than in the toolkit.
+
+def test_the_view_does_not_jump_while_a_passage_is_being_selected():
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI)
+    assert "if following_newest and not has_selection:" in body
+
+
+def test_following_the_newest_means_being_near_the_top():
+    """
+    The list is newest first, so new lines arrive at the top. The old test
+    asked whether the view was near the *end* of the document -- where the
+    oldest lines are -- and so followed new arrivals precisely when the reader
+    had scrolled back to read something older.
+    """
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI)
+    assert "yview()[0] <= 0.05" in body
+    assert "was_at_bottom" not in body
+
+
+def test_the_selection_is_not_restored_by_index():
+    """
+    Tk moves tags itself when text is inserted above them. Capturing
+    sel.first/sel.last, inserting at "1.0", then re-adding sel at the captured
+    indices pointed the highlight at whatever had shifted into those positions.
+    """
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI)
+    assert 'tag_add("sel", selection_start' not in body
+
+
+def test_the_remembered_selection_is_text_not_a_position():
+    """
+    Which is what makes it survive the list moving underneath it: by the time
+    the button is pressed, the indices mean something else.
+    """
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI._remember_selection)
+    assert 'get("sel.first", "sel.last")' in body
+    assert "_last_selection = text" in body

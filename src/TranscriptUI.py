@@ -160,14 +160,18 @@ class TranscriptUI:
             if new_records:
                 # 保存当前的选择状态和滚动位置
                 try:
-                    selection_start = self.text_widget.index("sel.first")
-                    selection_end = self.text_widget.index("sel.last")
+                    self.text_widget.index("sel.first")
                     has_selection = True
                 except:
                     has_selection = False
                 
-                current_pos = self.textbox.yview()[1]  # 使用底部位置
-                was_at_bottom = current_pos >= 0.9  # 如果接近底部就认为是在底部
+                # The newest line goes to the *top* -- this list is newest
+                # first -- so "following the conversation" means being near the
+                # top, not the bottom. The old test asked whether the view was
+                # near the end of the document, which is where the oldest lines
+                # are: it followed the newest arrivals precisely when the
+                # reader had scrolled back to read something older.
+                following_newest = self.textbox.yview()[0] <= 0.05
                 
                 # 临时启用文本框，以便更新新内容
                 self.text_widget.configure(state="normal")
@@ -231,14 +235,19 @@ class TranscriptUI:
                         insert_position = "1.0"
                         text = f"{record['type']}: [Catching...]\n\n"
                         self.text_widget.insert(insert_position, text)                                                   
-                self.text_widget.see("1.0")
-
-                # 恢复选择状态
-                if has_selection:
-                    try:
-                        self.text_widget.tag_add("sel", selection_start, selection_end)
-                    except:
-                        pass
+                # Follow the newest line only when the reader is already
+                # there. A meeting appends continuously, and jumping to the top
+                # on every arrival makes it impossible to read anything older,
+                # or to finish dragging across a passage -- which is how a
+                # question gets selected in order to be answered.
+                #
+                # The selection is deliberately not restored afterwards. Tk
+                # moves tags itself when text is inserted above them, so the
+                # old code -- capturing sel.first/sel.last, inserting at "1.0",
+                # then re-adding sel at the captured indices -- pointed the
+                # highlight at whatever had shifted into those positions.
+                if following_newest and not has_selection:
+                    self.text_widget.see("1.0")
 
                 # 更新完成后设置为可交互状态
                 self.text_widget.configure(state="normal")
