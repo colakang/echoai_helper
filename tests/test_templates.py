@@ -493,3 +493,108 @@ def test_the_two_defaults_agree():
             assert shipped[key] == SettingsManager.DEFAULT_SETTINGS[key], \
                 f"{key}: shipped {shipped[key]!r} vs code " \
                 f"{SettingsManager.DEFAULT_SETTINGS[key]!r}"
+
+
+# --------------------------------------------------------------------------
+# Answering on demand
+# --------------------------------------------------------------------------
+#
+# The automatic path answers every finished utterance from the far end, which
+# is what an interview wants: a prompt while the other person is still
+# talking. A meeting is the other shape. Most of what is said needs no answer
+# from you, and only you know which part does -- so the trigger has to be
+# yours, and the input is the passage you point at rather than whatever
+# arrived last.
+
+def test_the_responder_can_be_asked_directly():
+    from src.GPTResponder import GPTResponder
+    assert hasattr(GPTResponder, "answer_passage")
+
+
+def test_an_explicit_request_is_not_length_filtered():
+    """
+    The filter stops the automatic path answering "嗯" and "好的" -- a guess
+    about whether an utterance was meant as a question. There is nothing to
+    guess about when someone has highlighted the text and pressed a button.
+    """
+    import inspect
+    from src.GPTResponder import GPTResponder
+    manual = inspect.getsource(GPTResponder.answer_passage)
+    assert "require_length=False" in manual
+
+    auto = inspect.getsource(GPTResponder._answer)
+    assert "if require_length and not _worth_answering" in auto
+
+
+def test_it_answers_the_whole_selection():
+    """
+    A question in a meeting is usually spread over several turns. Answering
+    only its last sentence answers the wrong question, so the button takes
+    whatever is highlighted rather than a single line.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    handler = body.split("def answer_selection", 1)[1][:900]
+    assert "selected_passage()" in handler
+
+
+def test_the_selection_survives_pressing_the_button():
+    """
+    Tk hands the highlight to the system selection unless told not to, and
+    clears its own sel tag the moment another widget claims it. Selecting a
+    passage and pressing a button therefore destroyed the selection on the way
+    to the handler, which reads as the button not working.
+    """
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI._configure_textbox)
+    assert "exportselection=False" in body
+
+
+def test_a_remembered_selection_is_used_when_the_live_one_is_gone():
+    """
+    Belt and braces. "I highlighted that, then pressed the button" should not
+    depend on focus behaviour at all -- a button that works or does not
+    depending on where focus happens to be is indistinguishable from broken.
+    """
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI.selected_passage)
+    assert "_last_selection" in body
+
+
+def test_an_empty_selection_says_so():
+    """Silence would read as a broken button."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    handler = body.split("def answer_selection", 1)[1][:900]
+    assert "showinfo" in handler
+
+
+def test_asking_does_not_depend_on_the_automatic_switch():
+    """
+    The two are independent: the switch governs whether replies happen by
+    themselves, and the button is an explicit request. Requiring the switch
+    would mean turning on the thing you are trying to avoid in order to ask
+    once.
+    """
+    import inspect
+    from src.GPTResponder import GPTResponder
+    manual = inspect.getsource(GPTResponder.answer_passage)
+    assert "replies_enabled" not in manual
+    assert "record_only" not in manual
+
+
+def test_the_import_buttons_do_not_sit_on_the_action_buttons():
+    """
+    They were briefly gridded into column 1, where the action buttons live --
+    small enough to still be clickable, which is how it survived being
+    noticed. Each belongs beside its own dropdown.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    assert 'import_button.grid(row=row, column=0' in body
+    assert 'btn.grid(row=i, column=1' in body

@@ -497,7 +497,11 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
             width=160,
             height=dropdown_height,  # 新增这行
         )
-        menu.grid(row=row, column=0, padx=(80, 5), pady=1, sticky="e")
+        # Leave room on the right for the import button, which belongs beside
+        # its own dropdown. It was briefly in column 1, on top of the action
+        # buttons -- small enough to still be clickable, which is how that
+        # survived being noticed.
+        menu.grid(row=row, column=0, padx=(80, 34), pady=1, sticky="e")
         template_vars[setting_key] = var
         template_menus[setting_key] = menu
 
@@ -528,7 +532,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
             main_control_frame, text="+", width=26, height=dropdown_height,
             command=make_importer(),
             fg_color="#2B4C7E")
-        import_button.grid(row=row, column=1, padx=(0, 5), pady=1, sticky="w")
+        import_button.grid(row=row, column=0, padx=(0, 5), pady=1, sticky="e")
         template_imports[setting_key] = import_button
         row += 1
 
@@ -644,8 +648,38 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
             traceback.print_exc()
 
     # === Column 2: Action Buttons ===
+    def answer_selection():
+        """
+        Answer the passage highlighted in the transcript.
+
+        The automatic path answers every finished utterance from the far end,
+        which suits an interview. A meeting is the other shape: most of what is
+        said needs no answer from you, and only you know which part does -- so
+        the trigger is yours, and the input is what you point at rather than
+        whatever arrived last.
+
+        Whole passage, not a single line: a question in a meeting is usually
+        spread over several turns, and answering the last sentence of it in
+        isolation answers the wrong question.
+        """
+        passage = transcript_ui.selected_passage()
+        if not passage.strip():
+            messagebox.showinfo(
+                "Nothing selected",
+                "Highlight the part of the transcript you want answered, "
+                "then press Answer.\n\nDrag across as many turns as the "
+                "question covers — the whole selection is sent.")
+            return
+        lines = len([l for l in passage.splitlines() if l.strip()])
+        print(f"[INFO] Answering a selection of {lines} line(s), "
+              f"{len(passage)} characters")
+        if not responder.answer_passage(passage):
+            messagebox.showwarning("Nothing to answer",
+                                   "That selection had no text in it.")
+
     buttons_data = [
         ("Clear Transcript", lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui), "#1f538d"),
+        ("Answer Selection", answer_selection, "#7a4a1f"),
         ("Export Conversation", export_responses, "#1B4332"),
         ("Pop Up", None, "#1B4332")
     ]
@@ -872,13 +906,6 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         checkbox_height=16,
     )
     diarize_checkbox.pack(side="left", padx=(0, 5))
-    # Says what the checkbox cannot: the labels shown live are provisional, and
-    # the accurate ones come from re-clustering at export with the headcount.
-    # Without this someone reasonably reads three labels as three people.
-    diarize_hint = ctk.CTkLabel(
-        controls_frame, text="(rough live; set people, merge at export)",
-        font=("Arial", 9), text_color="#8a8a8a")
-    diarize_hint.pack(side="left", padx=(0, 5))
 
     # Stop transcribing your own microphone.
     #
@@ -1246,7 +1273,8 @@ def main():
         {"You": mic_queue, "Speaker": speaker_queue},
         on_rebuilt=_mic_rebuilt)
 
-    responder = GPTResponder(response_manager)
+    responder = GPTResponder(response_manager,
+                             session_provider=lambda: transcriber.session)
     respond = threading.Thread(target=responder.respond_to_transcriber, args=(transcriber,))
     respond.daemon = True
     respond.start()

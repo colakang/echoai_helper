@@ -4,6 +4,7 @@ import threading
 import re
 import time
 import traceback
+from datetime import datetime
 
 from .prompts import build_messages
 from .config import SystemConfig, EnvConfig, PathConfig, LLMConfig
@@ -62,8 +63,11 @@ def _utterance_only(text: str) -> str:
 
 
 class GPTResponder:
-    def __init__(self, response_manager):
+    def __init__(self, response_manager, session_provider=None):
         self.response_manager = response_manager
+        # Looked up when an answer completes rather than held, because the
+        # session is replaced when the transcript is cleared.
+        self.session_provider = session_provider
         self.response = ""
         self._response_update_interval = 2
         self._lock = threading.Lock()
@@ -284,7 +288,53 @@ class GPTResponder:
                 traceback.print_exc()
                 time.sleep(0.1)
 
-    def _answer(self, question_text, current_response_id):
+    def answer_passage(self, passage, on_done=None):
+        """
+        Answer a passage the user picked out, now.
+
+        The automatic path answers every finished utterance from the far end,
+        which is what an interview wants: a prompt while the other person is
+        still talking. A meeting is not that. There, most of what is said needs
+        no answer from you, and the one part that does is known only to you --
+        so the trigger has to be yours, and the input is the passage you point
+        at rather than the last sentence to arrive.
+
+        Runs on its own thread: the model takes seconds and this is called from
+        a button.
+
+        The length filter does not apply. It exists to stop the automatic path
+        answering "嗯" and "好的", which is a guess about intent -- and there is
+        nothing to guess about when someone has selected the text and asked.
+        """
+        passage = _utterance_only((passage or "").strip())
+        if not passage:
+            return False
+
+        def run():
+            with self._lock:
+                if self._processing:
+                    print("[Responder] Busy; ignoring the request.")
+                    return
+                self._processing = True
+            try:
+                response_id = self.response_manager.create_response(
+                    question_time=datetime.now(), question_text=passage)
+                self._answer(passage, response_id, require_length=False)
+                self._last_processed_id = response_id
+            except Exception as e:
+                print(f"[Responder] Could not answer the selection: {e}")
+                traceback.print_exc()
+            finally:
+                with self._lock:
+                    self._processing = False
+                if on_done is not None:
+                    on_done()
+
+        threading.Thread(target=run, daemon=True,
+                         name="AnswerPassage").start()
+        return True
+
+    def _answer(self, question_text, current_response_id, require_length=True):
         previous = self.response_manager.get_response(self._last_processed_id)
         previous_answer = ""
         previous_question = ""
@@ -298,7 +348,7 @@ class GPTResponder:
         question_text = _utterance_only(question_text)
         previous_question = _utterance_only(previous_question)
 
-        if not _worth_answering(question_text):
+        if require_length and not _worth_answering(question_text):
             print("Skipping: too short ({} chars)".format(len(question_text.strip())))
             return
 
@@ -319,10 +369,36 @@ class GPTResponder:
 
         if answered:
             print("Generated response: {}".format(self.response))
+            self._record(current_response_id, question_text, self.response)
         elif self.response == "Thinking...":
             # Nothing came back at all. Leave the previous answer up rather
             # than a spinner that will never resolve.
             self.response = previous_answer
+
+    def _record(self, response_id, question, answer):
+        """
+        Write a finished answer to the session file.
+
+        session.append_response has existed since sessions were added and had
+        never been called, so no answer has ever been written to one. Nothing
+        showed it: the export offered from the app reads the live transcript,
+        where the answers are held in memory. It is re-exporting a past
+        session -- `echoai-helper sessions --export N` -- that went to the
+        file, found no answers there, and produced a transcript with all of
+        them missing.
+
+        That was survivable while replies were a side feature of interviews.
+        It stops being survivable when answering during a meeting is the point
+        of the session.
+        """
+        session = self.session_provider() if self.session_provider else None
+        if session is None:
+            return
+        try:
+            session.append_response(response_id, question, answer)
+        except Exception as e:
+            # An answer that cannot be filed is still an answer on screen.
+            print(f"[Responder] Could not record the answer: {e}")
 
     def update_response_interval(self, interval):
         """No-op, kept for callers that still set it.

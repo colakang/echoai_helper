@@ -69,6 +69,50 @@ class TranscriptUI:
         """配置文本框的基本设置"""
         self.textbox.configure(cursor="hand2")
         self.text_widget.configure(state="normal")  # 确保文本可以选择
+
+        # exportselection defaults on, which hands the highlight to the system
+        # selection -- and the moment another widget claims that, Tk clears the
+        # sel tag. Selecting a passage and then pressing a button therefore
+        # destroyed the selection on the way to the handler, which read as the
+        # button not working.
+        self.text_widget.configure(exportselection=False)
+
+        # Remembered as well, because "I highlighted that, then pressed the
+        # button" should not depend on focus behaviour at all.
+        self._last_selection = ""
+        self.text_widget.bind("<ButtonRelease-1>", self._remember_selection,
+                              add="+")
+
+    def _remember_selection(self, _event=None) -> None:
+        try:
+            text = self.text_widget.get("sel.first", "sel.last")
+        except Exception:
+            return          # a click with no drag; keep what was there
+        if text.strip():
+            self._last_selection = text
+
+    def selected_passage(self) -> str:
+        """
+        What the user highlighted, live or last time.
+
+        Falls back to the remembered selection rather than returning nothing:
+        the alternative is a button that works or does not depending on where
+        focus happens to be, which is indistinguishable from broken.
+        """
+        try:
+            live = self.text_widget.get("sel.first", "sel.last")
+            if live.strip():
+                return live
+        except Exception:
+            pass
+        return self._last_selection
+
+    def forget_selection(self) -> None:
+        self._last_selection = ""
+        try:
+            self.text_widget.tag_remove("sel", "1.0", "end")
+        except Exception:
+            pass
         
     def toggle_debug(self, enabled: bool = None) -> None:
         """
