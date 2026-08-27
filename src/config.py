@@ -224,6 +224,92 @@ class SystemConfig:
         """
         cls._record_only_mode = bool(value)
         
+class LLMConfig:
+    """
+    Which language model to ask, chosen in the app rather than in a file.
+
+    conf.yaml still holds the default and the list of choices -- model names
+    change faster than releases do, and a name baked into the source goes stale
+    the week after it ships, so the list is data. What this adds is the ability
+    to change the answer without editing a file that, installed from a wheel,
+    lives in site-packages.
+
+    The override is process-wide and applies to both consumers: the live reply
+    suggestions and the cleanup pass at export. Having those silently disagree
+    about which model is in use would be worse than having no menu at all.
+    """
+
+    _model = None          # None means "not chosen in this process yet"
+    _loaded = False        # whether the saved choice has been read from disk
+
+    @classmethod
+    def _llm_section(cls):
+        import yaml
+        try:
+            with open(PathConfig.get_conf_file(), "rb") as f:
+                return (yaml.safe_load(f) or {}).get("LLM", {}) or {}
+        except Exception as e:
+            print(f"[WARN] Could not read the LLM configuration: {e}")
+            return {}
+
+    @classmethod
+    def configured_model(cls) -> Optional[str]:
+        """The default from conf.yaml, for whichever provider is configured."""
+        section = cls._llm_section()
+        provider = (section.get("provider") or "openai").lower()
+        return (section.get(provider) or {}).get("model")
+
+    @classmethod
+    def _load_saved(cls) -> None:
+        """
+        Read the user's saved choice, once, on first use.
+
+        Pulled in here rather than applied by whoever starts up first, because
+        that ordering is not something to rely on: the responder builds its
+        provider the moment it is constructed, and the UI -- which is where the
+        saved value used to be read -- is built after it. The choice was
+        therefore persisted correctly and then ignored on every restart, with
+        the menu showing one model and the provider using another.
+        """
+        cls._loaded = True
+        try:
+            from .SettingsManager import SettingsManager
+            saved = SettingsManager().get_setting("llm_model")
+        except Exception as e:
+            print(f"[WARN] Could not read the saved model: {e}")
+            return
+        if saved:
+            cls._model = saved
+
+    @classmethod
+    def get_model(cls) -> Optional[str]:
+        if not cls._loaded:
+            cls._load_saved()
+        return cls._model or cls.configured_model()
+
+    @classmethod
+    def set_model(cls, name: Optional[str]) -> None:
+        cls._loaded = True
+        cls._model = name or None
+
+    @classmethod
+    def available_models(cls) -> list:
+        """
+        What to offer in the menu.
+
+        The configured model is always included even when the list omits it,
+        so the menu can never fail to show what is actually in use. No name is
+        invented here: if conf.yaml lists nothing, the only option is whatever
+        is already configured.
+        """
+        listed = cls._llm_section().get("models") or []
+        models = [str(m) for m in listed if str(m).strip()]
+        current = cls.get_model()
+        if current and current not in models:
+            models.insert(0, current)
+        return models
+
+
 class AudioConfig:
     _instance = None
     _phrase_timeout = 5.2  # 默认值

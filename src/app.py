@@ -21,7 +21,7 @@ from src.ResponseManager import ResponseManager
 from src.SettingsManager import SettingsManager
 from src.TemplateManager import TemplateManager
 import src.TranscriberModels as TranscriberModels
-from src.config import EnvConfig, SystemConfig, AudioConfig, PathConfig
+from src.config import EnvConfig, SystemConfig, AudioConfig, PathConfig, LLMConfig
 from src import profiles
 from src.TranscriptUI import TranscriptUI
 #import torch
@@ -283,9 +283,13 @@ def _build_polish_provider(backend):
         provider_type = "openai"
     if provider_type == "openai":
         config = {"api_key": EnvConfig.get_openai_key(),
-                  "model": llm_config.get("openai", {}).get("model", "gpt-4o-mini")}
+                  "model": LLMConfig.get_model()}
     else:
         config = dict(llm_config.get(provider_type, {}))
+        # The menu wins here too, so cleanup and live replies cannot end up
+        # using different models without anyone having asked for that.
+        if LLMConfig.get_model():
+            config["model"] = LLMConfig.get_model()
     return create_llm_provider(provider_type, config)
 
 
@@ -408,7 +412,8 @@ def clear_context(transcriber, mic_queue, speaker_queue, transcript_ui):
     transcript_ui.clear()
     print("Context cleared")
 
-def create_ui_components(root, response_manager, transcriber, mic_queue, speaker_queue):
+def create_ui_components(root, response_manager, transcriber, mic_queue,
+                         speaker_queue, responder=None):
     """Phase 2: 创建并配置所有UI组件（双队列版本）"""
     # 基础设置
     ctk.set_appearance_mode("dark")
@@ -767,6 +772,44 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         text_color="#8a8a8a",
     )
     pause_unit.grid(row=2, column=2, padx=(135, 5), pady=2, sticky="w")
+
+    # Which model to ask. The choices come from conf.yaml rather than from the
+    # source, because model names change faster than releases do -- a name
+    # baked into the code goes stale the week after it ships.
+    #
+    # One menu, not two, although there are two consumers: the live reply
+    # suggestions and the cleanup pass at export. Letting those disagree about
+    # which model is in use would be worse than having no menu at all.
+    model_label = ctk.CTkLabel(main_control_frame, text="Model:",
+                               font=("Arial", 12), text_color="#FFFCF2")
+    model_label.grid(row=3, column=2, padx=5, pady=2, sticky="w")
+
+    # No need to apply the saved value here: LLMConfig loads it on first use,
+    # which is what makes it survive a restart. Reading it here was the bug --
+    # the responder builds its provider before this runs.
+    model_values = LLMConfig.available_models() or ["(none configured)"]
+    model_var = ctk.StringVar(value=LLMConfig.get_model() or model_values[0])
+
+    def on_model_change(value):
+        LLMConfig.set_model(value)
+        settings_manager.update_setting("llm_model", value)
+        # Rebuild the live provider, which is otherwise constructed once at
+        # startup and would keep answering on the previous model.
+        rebuilt = False
+        if responder is not None:
+            try:
+                rebuilt = responder.reload_provider()
+            except Exception as e:
+                print(f"[WARN] Could not switch the model: {e}")
+        print(f"[INFO] Model: {value}"
+              + ("" if rebuilt else " (replies will use it on next start)"))
+        model_label.configure(text_color="#639cdc")
+        root.after(500, lambda: model_label.configure(text_color="#FFFCF2"))
+
+    model_dropdown = ctk.CTkOptionMenu(
+        main_control_frame, variable=model_var, values=model_values,
+        width=150, height=dropdown_height, command=on_model_change)
+    model_dropdown.grid(row=3, column=2, padx=(60, 5), pady=2, sticky="w")
 
     # === Column 4: Window Controls ===
     # Create a frame for the first row controls
@@ -1185,7 +1228,7 @@ def main():
 
     root = ctk.CTk()
     widgets = create_ui_components(root, response_manager, transcriber,
-                                   mic_queue, speaker_queue)
+                                   mic_queue, speaker_queue, responder)
     transcript_ui = widgets["transcript_ui"]
     response_textbox = widgets["response_textbox"]
     freeze_button = widgets["freeze_button"]

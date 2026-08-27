@@ -236,3 +236,131 @@ def test_a_failed_switch_is_shown_on_screen():
     body = inspect.getsource(app.create_ui_components)
     handler = body.split("def on_selection_change", 1)[1][:1200]
     assert "showwarning" in handler or "showerror" in handler
+
+
+# --------------------------------------------------------------------------
+# Choosing the model
+# --------------------------------------------------------------------------
+
+from src.config import LLMConfig                                   # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def restore_model():
+    previous = LLMConfig._model
+    yield
+    LLMConfig._model = previous
+
+
+def test_the_shipped_default_is_offered():
+    assert LLMConfig.configured_model()
+    assert LLMConfig.configured_model() in LLMConfig.available_models()
+
+
+def test_choosing_a_model_overrides_the_file():
+    LLMConfig.set_model("some-other-model")
+    assert LLMConfig.get_model() == "some-other-model"
+
+
+def test_clearing_the_choice_falls_back_to_the_file():
+    LLMConfig.set_model("temporary")
+    LLMConfig.set_model(None)
+    assert LLMConfig.get_model() == LLMConfig.configured_model()
+
+
+def test_the_current_model_is_always_in_the_menu(monkeypatch):
+    """
+    Even when the list omits it. A menu that cannot show what is actually in
+    use is worse than no menu: the user reads the wrong answer off it.
+    """
+    monkeypatch.setattr(LLMConfig, "_llm_section",
+                        classmethod(lambda cls: {"models": ["a", "b"]}))
+    LLMConfig.set_model("something-not-listed")
+    assert LLMConfig.available_models()[0] == "something-not-listed"
+
+
+def test_no_model_name_is_invented_in_code(monkeypatch):
+    """
+    If conf.yaml lists nothing and configures nothing, the menu is empty rather
+    than populated with names the code made up. Model names change faster than
+    releases do; one baked into the source is stale the week after it ships.
+    """
+    monkeypatch.setattr(LLMConfig, "_llm_section", classmethod(lambda cls: {}))
+    LLMConfig.set_model(None)
+    assert LLMConfig.available_models() == []
+
+
+def test_the_list_comes_from_configuration_not_source():
+    """The shipped list lives in conf.yaml, where it can be edited without a release."""
+    import yaml
+    from pathlib import Path
+    from src.config import PathConfig
+    config = yaml.safe_load(Path(PathConfig.get_conf_file()).read_text(encoding="utf-8"))
+    assert config["LLM"]["models"], "conf.yaml must carry the menu's options"
+
+
+def test_both_consumers_use_the_same_choice():
+    """
+    The live replies and the cleanup pass at export must not end up on
+    different models. They are built in different places and at different
+    times, which is exactly how that would happen unnoticed.
+    """
+    import inspect
+    from src import app, GPTResponder as responder_module
+    assert "LLMConfig.get_model()" in inspect.getsource(app._build_polish_provider)
+    assert "LLMConfig.get_model()" in inspect.getsource(
+        responder_module.GPTResponder._initialize_llm_provider)
+
+
+def test_the_live_provider_can_be_rebuilt():
+    """
+    Built once at construction, so without this a model chosen from the menu
+    would apply to export and silently not to the replies.
+    """
+    from src.GPTResponder import GPTResponder
+    assert hasattr(GPTResponder, "reload_provider")
+
+
+def test_the_chosen_model_survives_a_restart(tmp_path, monkeypatch):
+    """
+    The bug this closes. The saved choice was applied while building the UI,
+    and the responder builds its provider *before* that -- so the model was
+    persisted correctly and then ignored on every restart, with the menu
+    showing one model and the provider using another.
+
+    Loading on first use removes the ordering question rather than answering
+    it, which matters because the answer was not obvious and not stable.
+    """
+    from src.SettingsManager import SettingsManager
+
+    monkeypatch.setattr(SettingsManager, "get_setting",
+                        lambda self, key, default=None:
+                        "saved-model" if key == "llm_model" else default)
+    LLMConfig._model = None
+    LLMConfig._loaded = False
+
+    # Nothing has touched the UI. A fresh process asking the question directly
+    # -- which is what GPTResponder does at construction -- must see the
+    # saved choice.
+    assert LLMConfig.get_model() == "saved-model"
+
+
+def test_loading_the_saved_model_happens_once(monkeypatch):
+    """Reading settings on every call would put file IO on the response path."""
+    from src.SettingsManager import SettingsManager
+    calls = []
+    monkeypatch.setattr(SettingsManager, "get_setting",
+                        lambda self, key, default=None: calls.append(key) or None)
+    LLMConfig._model = None
+    LLMConfig._loaded = False
+
+    LLMConfig.get_model(); LLMConfig.get_model(); LLMConfig.get_model()
+    assert calls.count("llm_model") == 1
+
+
+def test_the_ui_does_not_re_apply_the_saved_model():
+    """It is loaded on demand; doing it in the UI is what made it too late."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    assert 'get_setting("llm_model")' not in body

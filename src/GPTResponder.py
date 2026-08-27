@@ -6,7 +6,7 @@ import time
 import traceback
 
 from .prompts import build_messages
-from .config import SystemConfig, EnvConfig, PathConfig
+from .config import SystemConfig, EnvConfig, PathConfig, LLMConfig
 from .llm import create_llm_provider
 import yaml
 from pathlib import Path
@@ -53,6 +53,17 @@ class GPTResponder:
         if not self._initialize_llm_provider():
             raise ValueError("Failed to initialize LLM provider. Please check your configuration.")
 
+    def reload_provider(self) -> bool:
+        """
+        Rebuild the provider, picking up a model chosen since startup.
+
+        The provider is otherwise built once, at construction, so changing the
+        model in the menu would have applied to the cleanup pass at export and
+        silently not to the live replies -- two halves of the app quietly using
+        different models.
+        """
+        return self._initialize_llm_provider()
+
     def _initialize_llm_provider(self) -> bool:
         """
         Initialize LLM Provider (supports OpenAI, Gemini, Ollama, Claude, etc.)
@@ -79,7 +90,7 @@ class GPTResponder:
 
                 provider_config = {
                     'api_key': EnvConfig.get_openai_key(),
-                    'model': llm_config.get('openai', {}).get('model', 'gpt-4o-mini')
+                    'model': LLMConfig.get_model()
                 }
             elif provider_type == 'cli':
                 cli_config = llm_config.get('cli', {})
@@ -93,7 +104,7 @@ class GPTResponder:
                 # LiteLLM configuration (supports Gemini, Ollama, Claude, etc.)
                 litellm_config = llm_config.get('litellm', {})
                 provider_config = {
-                    'model': litellm_config.get('model'),
+                    'model': LLMConfig.get_model() or litellm_config.get('model'),
                     'api_key': litellm_config.get('api_key'),
                     'api_base': litellm_config.get('api_base')
                 }

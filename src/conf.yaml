@@ -60,8 +60,20 @@ LLM:
   # OpenAI Configuration
   # ----------------------------------------------------------------------------
   openai:
-    model: "gpt-4o-mini"  # Options: gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-3.5-turbo
+    model: "gpt-4o-mini"   # the default; the app's Model menu overrides it
     # API key is loaded from environment variable OPENAI_API_KEY
+
+  # Offered in the app's Model menu. Edit this list rather than the code: model
+  # names change faster than releases do, and a name baked into the source goes
+  # stale the week after it ships. Anything valid for your provider works here.
+  #
+  # `echoai-helper config` puts an editable copy of this file where you can
+  # reach it; the app reads that copy in preference to the shipped one.
+  models:
+    - "gpt-4o-mini"
+    - "gpt-4o"
+    - "gpt-4.1-mini"
+    - "gpt-4.1"
 
   # ----------------------------------------------------------------------------
   # LiteLLM Configuration (supports multiple backends)
