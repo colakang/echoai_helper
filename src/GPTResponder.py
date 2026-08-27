@@ -45,21 +45,43 @@ def _is_no_response(text: str) -> bool:
 # the match was uncertain.
 _SPEAKER_LABEL = re.compile(r"^\s*S\d+\??\s*[:：]\s*")
 
+# How the transcript pane renders a line: "Speaker: [S1: hello]". Both parts
+# are presentation -- the track name and the brackets belong to the widget.
+_DISPLAY_LINE = re.compile(r"^\s*(?:Speaker|You)\s*[:：]\s*\[(?P<body>.*)\]\s*$")
+
 
 def _utterance_only(text: str) -> str:
     """
-    Strip the speaker label before the words reach the model.
+    Reduce a transcript line, or several, to the words that were spoken.
 
-    The transcript carries "S2: 零七七" because the interface and the export
-    both want to show who spoke. The model does not: it reads the label as part
-    of the sentence, and on a customer-service call that means inventing
-    reference numbers -- "S2" plus "零七七" came back as service number S3099,
-    a number nobody said.
+    Two layers of presentation sit on top of them, and neither may reach the
+    model:
 
-    Stripped here rather than at the source, because the label genuinely
-    belongs in the transcript. It is only the model that must not see it.
+        Speaker: [S2: 零七七]
+        ^^^^^^^^^^          the pane's own formatting
+                 ^^^^       the diarization label
+
+    The label matters most. The model reads it as part of the sentence, and on
+    a customer-service call that means inventing reference numbers -- "S2" and
+    "零七七" came back as service number S3099, which nobody said.
+
+    Applied per line rather than to the whole string: a passage picked out of
+    the transcript is several lines, and an anchored pattern without MULTILINE
+    cleans only the first one -- which looked like it worked for as long as
+    every question was a single utterance.
+
+    Stripped here rather than at the source, because both layers genuinely
+    belong where they are. It is only the model that must not see them.
     """
-    return _SPEAKER_LABEL.sub("", text or "").strip()
+    lines = []
+    for line in (text or "").splitlines():
+        display = _DISPLAY_LINE.match(line)
+        if display:
+            line = display.group("body")
+        line = _SPEAKER_LABEL.sub("", line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 class GPTResponder:

@@ -247,3 +247,48 @@ def test_the_label_is_kept_in_the_transcript():
     from src import AudioTranscriber as module
     body = inspect.getsource(module.AudioTranscriber._finalize_segment)
     assert 'display = f"{label}: {text}"' in body
+
+
+# --------------------------------------------------------------------------
+# Multi-line passages, and the pane's own formatting
+# --------------------------------------------------------------------------
+#
+# Found by picking several turns and answering them. The passage comes out of
+# the transcript pane, so it carries two layers of presentation:
+#
+#     Speaker: [S2: 零七七]
+#     ^^^^^^^^^^            the widget's formatting
+#              ^^^^         the diarization label
+#
+# Both reached the model. The label had already been fixed for the automatic
+# path and came straight back through the manual one, on the same kind of
+# input -- read-out digits, where a stray "S2" becomes part of an invented
+# reference number.
+
+def test_the_panes_formatting_is_removed():
+    assert _utterance_only("Speaker: [S1: 你好]") == "你好"
+    assert _utterance_only("You: [S2?: 零九九。]") == "零九九。"
+
+
+def test_every_line_is_cleaned_not_only_the_first():
+    """
+    The pattern is anchored, and without MULTILINE it cleans one line. That
+    looked correct for as long as every question was a single utterance --
+    which it was, until turns could be picked.
+    """
+    passage = "Speaker: [S1: 一]\nSpeaker: [S2: 二]\nSpeaker: [S3: 三]"
+    assert _utterance_only(passage) == "一\n二\n三"
+
+
+def test_a_line_with_no_label_survives_intact():
+    assert _utterance_only("Speaker: [没有标签的一行]") == "没有标签的一行"
+
+
+def test_plain_text_is_untouched():
+    assert _utterance_only("零七七") == "零七七"
+    assert _utterance_only("SQL: how do I index this") == "SQL: how do I index this"
+
+
+def test_blank_lines_are_dropped():
+    """The pane separates turns with them; they are not part of the question."""
+    assert _utterance_only("Speaker: [S1: 一]\n\nSpeaker: [S2: 二]") == "一\n二"
