@@ -293,6 +293,30 @@ class LLMConfig:
         cls._model = name or None
 
     @classmethod
+    def provider_for(cls, model: Optional[str] = None) -> str:
+        """
+        Which backend a model name implies.
+
+        A bare name is OpenAI. A name carrying a vendor prefix -- anything with
+        a "/" in it, as LiteLLM already names its models -- goes through
+        LiteLLM, which is how every other backend is reached.
+
+        This is why there is one menu rather than a provider dropdown beside a
+        model dropdown. The two would only ever be set in valid combinations
+        anyway, so making the user keep them in sync is asking them to maintain
+        an invariant the app can see for itself. Adding Gemini or a local
+        Ollama becomes a line in conf.yaml rather than a UI change.
+        """
+        name = model if model is not None else cls.get_model()
+        if name and "/" in name:
+            return "litellm"
+        section = cls._llm_section()
+        configured = (section.get("provider") or "openai").lower()
+        # A prefix-free name means OpenAI unless the file asks for a CLI, which
+        # is a deliberate choice about billing rather than about the model.
+        return configured if configured == "cli" else "openai"
+
+    @classmethod
     def available_models(cls) -> list:
         """
         What to offer in the menu.

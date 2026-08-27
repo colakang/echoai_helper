@@ -364,3 +364,100 @@ def test_the_ui_does_not_re_apply_the_saved_model():
     from src import app
     body = inspect.getsource(app.create_ui_components)
     assert 'get_setting("llm_model")' not in body
+
+
+# --------------------------------------------------------------------------
+# Reaching backends that are not OpenAI
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("model,expected", [
+    ("gpt-4o-mini", "openai"),
+    ("gpt-5.6-luna", "openai"),
+    ("gemini/gemini-2.0-flash", "litellm"),
+    ("ollama/llama3", "litellm"),
+    ("anthropic/claude-sonnet-4-5", "litellm"),
+])
+def test_the_model_name_picks_the_backend(model, expected):
+    """
+    One menu, not a provider dropdown beside a model dropdown.
+
+    The two would only ever be set in valid combinations anyway, so making the
+    user keep them in sync is asking them to maintain an invariant the app can
+    see for itself. A vendor prefix -- which is how LiteLLM already names its
+    models -- says everything needed.
+    """
+    assert LLMConfig.provider_for(model) == expected
+
+
+def test_adding_a_backend_needs_no_code_change():
+    """
+    Reaching Gemini or a local Ollama is a line in conf.yaml. Pinned because
+    the obvious alternative -- a provider enum in the source -- would need a
+    release every time a backend appeared.
+    """
+    import inspect
+    body = inspect.getsource(LLMConfig.provider_for)
+    for vendor in ("gemini", "ollama", "anthropic", "azure"):
+        assert vendor not in body.lower().split('"""')[2], \
+            f"{vendor} must not be named in the routing logic"
+
+
+def test_both_consumers_route_the_same_way():
+    import inspect
+    from src import app, GPTResponder as responder_module
+    assert "provider_for()" in inspect.getsource(app._build_polish_provider)
+    assert "provider_for()" in inspect.getsource(
+        responder_module.GPTResponder._initialize_llm_provider)
+
+
+# --------------------------------------------------------------------------
+# Models that reject a temperature
+# --------------------------------------------------------------------------
+
+def test_a_rejected_temperature_is_recognised():
+    """
+    Measured against the live API: gpt-5.6-luna answers a 400 with
+    "Unsupported value: 'temperature' does not support 0.6 with this model.
+    Only the default (1) value is supported." while gpt-4o-mini and
+    gpt-5.4-mini accept it.
+    """
+    from src.llm.openai_provider import OpenAIProvider as P
+    rejection = ("Error code: 400 - {'error': {'message': \"Unsupported value: "
+                 "'temperature' does not support 0.6 with this model. Only the "
+                 "default (1) value is supported.\"}}")
+    assert P._is_temperature_rejection(Exception(rejection))
+
+
+def test_other_failures_are_not_mistaken_for_it():
+    """Retrying without temperature would not help, and would double the bill."""
+    from src.llm.openai_provider import OpenAIProvider as P
+    for other in ("Error code: 404 - model_not_found",
+                  "Rate limit reached",
+                  "Connection error",
+                  "Error code: 401 - invalid api key"):
+        assert not P._is_temperature_rejection(Exception(other))
+
+
+def test_no_model_is_named_in_the_temperature_handling():
+    """
+    Which models reject a temperature is learned, not listed. A list here
+    would go stale exactly as fast as a list of model names, and discovering
+    it costs one rejected request per model per process.
+    """
+    import inspect
+    from src.llm import openai_provider
+    body = inspect.getsource(openai_provider.OpenAIProvider.generate_response)
+    assert "gpt-5" not in body and "gpt-4" not in body
+
+
+def test_a_failure_reaching_the_user_names_the_model():
+    """
+    This lands in the response pane during a live interview. The raw SDK repr
+    is several hundred characters of JSON; the usual cause is a model that does
+    not exist or is not enabled for the account, so say which model.
+    """
+    from src.llm.openai_provider import OpenAIProvider
+    p = OpenAIProvider(api_key="x", model="gpt-9-imaginary")
+    shown = p._describe(Exception("The model does not exist"))
+    assert "gpt-9-imaginary" in shown
+    assert len(shown) < 260

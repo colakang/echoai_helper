@@ -40,6 +40,27 @@ def _is_no_response(text: str) -> bool:
     return text.strip().strip(".").casefold() in ("none", "")
 
 
+# Diarization labels as _identify_speaker writes them: S1, S12, and S3? when
+# the match was uncertain.
+_SPEAKER_LABEL = re.compile(r"^\s*S\d+\??\s*[:：]\s*")
+
+
+def _utterance_only(text: str) -> str:
+    """
+    Strip the speaker label before the words reach the model.
+
+    The transcript carries "S2: 零七七" because the interface and the export
+    both want to show who spoke. The model does not: it reads the label as part
+    of the sentence, and on a customer-service call that means inventing
+    reference numbers -- "S2" plus "零七七" came back as service number S3099,
+    a number nobody said.
+
+    Stripped here rather than at the source, because the label genuinely
+    belongs in the transcript. It is only the model that must not see it.
+    """
+    return _SPEAKER_LABEL.sub("", text or "").strip()
+
+
 class GPTResponder:
     def __init__(self, response_manager):
         self.response_manager = response_manager
@@ -79,7 +100,11 @@ class GPTResponder:
 
             # Get LLM configuration
             llm_config = config.get('LLM', {})
-            provider_type = llm_config.get('provider', 'openai').lower()
+            # The chosen model decides the backend: a name carrying a vendor
+            # prefix goes through LiteLLM, a bare one to OpenAI. Picking
+            # "gemini/..." from the menu therefore just works, with no second
+            # control to keep in sync with the first.
+            provider_type = LLMConfig.provider_for()
 
             # Get provider-specific config
             if provider_type == 'openai':
@@ -270,6 +295,9 @@ class GPTResponder:
         # Only show "Thinking..." once the question has cleared the length
         # filter. Setting it unconditionally left it on screen forever
         # whenever the generator returned early on a too-short utterance.
+        question_text = _utterance_only(question_text)
+        previous_question = _utterance_only(previous_question)
+
         if not _worth_answering(question_text):
             print("Skipping: too short ({} chars)".format(len(question_text.strip())))
             return

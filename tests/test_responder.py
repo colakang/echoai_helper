@@ -194,3 +194,56 @@ def test_thinking_resolves_when_the_model_returns_nothing():
 
     responder._answer("what is the quarterly revenue", rid)
     assert responder.response != "Thinking..."
+
+
+# --------------------------------------------------------------------------
+# Speaker labels must not reach the model
+# --------------------------------------------------------------------------
+#
+# Found by playing a real customer-service recording through the app. The
+# transcript reads "S2: 零七七" because the interface and the export both want
+# to show who spoke; the model read the label as part of the sentence and
+# reported the caller's service number as "S3099" -- a number nobody said.
+#
+# On a call about a reference number, an invented one is worse than no answer.
+
+from src.GPTResponder import _utterance_only                      # noqa: E402
+
+
+@pytest.mark.parametrize("labelled,expected", [
+    ("S2: 零七七", "零七七"),
+    ("S1: hello there", "hello there"),
+    ("S12: hello", "hello"),
+    ("S3?: uncertain match", "uncertain match"),
+    ("S3? : spaced", "spaced"),
+    ("S2：全角冒号", "全角冒号"),
+])
+def test_a_diarization_label_is_removed(labelled, expected):
+    assert _utterance_only(labelled) == expected
+
+
+@pytest.mark.parametrize("untouched", [
+    "零七七",
+    "S 前面没有编号",
+    "Speaker: this is not a label",
+    "SQL: how do I index this",
+    "",
+])
+def test_ordinary_text_is_left_alone(untouched):
+    """
+    Only the exact shape the diarizer writes is stripped. "SQL:" opening an
+    answer, or a sentence that merely starts with S, must survive -- the point
+    is to remove a machine's annotation, not to edit what was said.
+    """
+    assert _utterance_only(untouched) == untouched.strip()
+
+
+def test_the_label_is_kept_in_the_transcript():
+    """
+    Stripped at the model, not at the source. The interface and the export both
+    want to show who spoke; it is only the model that must not see it.
+    """
+    import inspect
+    from src import AudioTranscriber as module
+    body = inspect.getsource(module.AudioTranscriber._finalize_segment)
+    assert 'display = f"{label}: {text}"' in body

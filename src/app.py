@@ -278,8 +278,10 @@ def _build_polish_provider(backend):
     if backend == "cli":
         return create_llm_provider("cli", dict(llm_config.get("cli", {})))
 
-    provider_type = llm_config.get("provider", "openai").lower()
+    provider_type = LLMConfig.provider_for()
     if provider_type == "cli":
+        # The polish backend was chosen explicitly above; falling back to a CLI
+        # here would ignore that choice.
         provider_type = "openai"
     if provider_type == "openai":
         config = {"api_key": EnvConfig.get_openai_key(),
