@@ -387,17 +387,16 @@ class AudioConfig:
         """
         Whether to ask a language model for a suggested reply.
 
-        Two conditions, and the mode one was missing. Reply suggestions are an
-        interview feature: in meeting notes the pause is long and partials are
-        off, so an answer arrives well after the moment it was for, and nobody
-        is looking at that pane anyway.
+        The switch, and only the switch. This briefly also required interview
+        mode, on the reasoning that replies arrive too late to be useful once
+        the meeting profile lengthens the pause -- which quietly removed a
+        supported use: answering during a meeting, semi-automatically, rather
+        than only during an interview. The pause being longer makes the answer
+        later, not useless, and that is the user's call to make.
 
-        Without this the only gate was the Record Only checkbox, which meant a
-        user in meeting mode who unticked it started paying for an API call on
-        every sentence the far end spoke, with nothing on screen to say so.
+        Off by default, so nothing is spent by anyone who has not asked for it.
         """
-        return (cls._profile == "interview"
-                and not SystemConfig.get_record_only_mode())
+        return not SystemConfig.get_record_only_mode()
 
     @classmethod
     def get_profile(cls):

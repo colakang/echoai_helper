@@ -475,6 +475,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         "Knowledge Base": (knowledge_files, "knowledge")
     }
     template_imports = {}
+    record_only_checkbox = None
 
     template_vars = {}
     template_menus = {}
@@ -701,24 +702,25 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
     )
     profile_hint.grid(row=1, column=2, columnspan=1, padx=5, pady=(0, 2), sticky="w")
 
-    def _apply_template_availability(profile):
+    def _apply_template_availability(*_):
         """
-        The prompt templates only feed the reply suggestions, and replies only
-        happen in interview mode -- so in meeting mode these three controls do
-        nothing at all. Leaving them live invites someone to spend time
-        choosing a persona that will never be consulted.
+        The prompt templates feed the reply suggestions and nothing else, so
+        they are live exactly when replies are.
 
-        Greying them out is only honest if the machinery behind them is off
-        too; see AudioConfig.set_replies_enabled below.
+        Keyed to the replies switch rather than to the mode. Tying it to the
+        mode looked tidier and was wrong: answering during a meeting is a
+        supported use, not an accident, and disabling the persona controls
+        there would have made it unusable.
         """
-        state = "normal" if profile.key == "interview" else "disabled"
-        for widget in list(template_menus.values()) + list(template_imports.values()):
+        wants_replies = not record_only_var.get()
+        state = "normal" if wants_replies else "disabled"
+        for widget in (list(template_menus.values())
+                       + list(template_imports.values())):
             widget.configure(state=state)
 
     def on_profile_change(label):
         profile = profiles.by_label(label)
         profiles.apply(profile, transcriber)
-        _apply_template_availability(profile)
         settings_manager.update_setting("profile", profile.key)
         settings_manager.update_setting("min_silence_ms", profile.min_silence_ms)
         profile_hint.configure(text=profile.description)
@@ -735,7 +737,6 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         command=on_profile_change,
     )
     profile_dropdown.grid(row=0, column=2, padx=(60, 5), pady=2, sticky="w")
-    _apply_template_availability(saved_profile)
 
     # Pause length -- the one segmentation knob worth exposing. Shorter reacts
     # sooner but splits sentences; longer merges separate turns.
@@ -822,13 +823,19 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
     record_only_var = tk.BooleanVar(value=settings_manager.get_setting("record_only_mode"))
 
     def toggle_record_only():
+        # Suppresses the reply suggestions without leaving interview mode --
+        # live partials and the shorter pause stay, the model calls stop. The
+        # name predates the mode selector, when it meant "just record, do not
+        # do the GPT thing"; the mode now covers most of that, and what is left
+        # is "interview timing, no API cost".
         is_record_only = record_only_var.get()
         SystemConfig.set_record_only_mode(is_record_only)
         settings_manager.update_setting("record_only_mode", is_record_only)
+        _apply_template_availability()
 
     record_only_checkbox = ctk.CTkCheckBox(
         controls_frame,
-        text="Record Only",
+        text="No replies",
         variable=record_only_var,
         command=toggle_record_only,
         width=100,
@@ -837,6 +844,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         checkbox_height=16
     )
     record_only_checkbox.pack(side="left", padx=(0, 5))  # 减少右侧padding
+    _apply_template_availability()
 
     # Speaker labelling. Only meaningful on the far-end track, which carries
     # everyone in the meeting; costs one voice embedding per utterance.

@@ -120,30 +120,36 @@ def restore_mode():
     SystemConfig.set_record_only_mode(record_only)
 
 
-def test_meeting_mode_never_asks_for_replies():
+@pytest.mark.parametrize("profile", ["meeting", "interview"])
+def test_replies_follow_the_switch_in_every_mode(profile):
     """
-    The bug this closes. Reply suggestions were gated only on the Record Only
-    checkbox, so a user in meeting mode who unticked it began paying for a
-    model call on every sentence the far end spoke -- with nothing on screen
-    to say it was happening, and the answers arriving in a pane they were not
-    looking at.
+    Answering during a meeting is a supported use, not an accident.
+
+    This briefly also required interview mode, on the reasoning that a longer
+    pause makes an answer arrive too late to matter. That removed the ability
+    to answer semi-automatically during a meeting -- one of the three things
+    this app is for. A later answer is later, not useless, and whether it is
+    worth having is the user's call.
     """
-    AudioConfig.set_profile("meeting")
-    SystemConfig.set_record_only_mode(False)
-    assert not AudioConfig.replies_enabled()
-
-
-def test_interview_mode_asks_for_replies():
-    AudioConfig.set_profile("interview")
+    AudioConfig.set_profile(profile)
     SystemConfig.set_record_only_mode(False)
     assert AudioConfig.replies_enabled()
 
-
-def test_record_only_still_overrides_inside_interview_mode():
-    """Mode is the outer gate; the checkbox remains meaningful within it."""
-    AudioConfig.set_profile("interview")
     SystemConfig.set_record_only_mode(True)
     assert not AudioConfig.replies_enabled()
+
+
+def test_replies_are_off_unless_asked_for():
+    """
+    Nothing is spent by anyone who has not turned them on. The shipped default
+    suppresses replies; enabling them is a deliberate act in either mode.
+    """
+    import json
+    from pathlib import Path
+    from src.config import PathConfig
+    shipped = json.loads(
+        (Path(PathConfig.get_config_path()) / "settings.json").read_text())
+    assert shipped["record_only_mode"] is True
 
 
 def test_the_transcriber_uses_that_gate_and_not_the_checkbox_alone():
@@ -160,16 +166,25 @@ def test_the_transcriber_uses_that_gate_and_not_the_checkbox_alone():
     assert "get_record_only_mode()" not in body
 
 
-def test_the_ui_disables_the_templates_outside_interview_mode():
+def test_the_templates_follow_the_replies_switch_not_the_mode():
+    """
+    They feed the replies and nothing else, so they are live exactly when
+    replies are. Keying them to the mode looked tidier and was wrong: it
+    disabled the persona controls during a meeting, where answering is a
+    supported use.
+    """
     import inspect
     from src import app
     body = inspect.getsource(app.create_ui_components)
-    assert "_apply_template_availability" in body
-    handler = body.split("def _apply_template_availability", 1)[1][:800]
-    assert 'profile.key == "interview"' in handler
+    # Slice to the end of the nested function, not a fixed number of
+    # characters -- a fixed window ran past it into unrelated code.
+    handler = body.split("def _apply_template_availability", 1)[1]
+    handler = handler.split("\n    def ", 1)[0]
+    assert "record_only_var.get()" in handler
+    assert "profile.key" not in handler
     assert '"disabled"' in handler
-    # Both the dropdowns and the import buttons, or the user can still import
-    # into a mode that will never read it.
+    # Both the dropdowns and the import buttons, or someone can still import
+    # into a state that will never read it.
     assert "template_menus" in handler and "template_imports" in handler
 
 
@@ -461,3 +476,24 @@ def test_a_failure_reaching_the_user_names_the_model():
     shown = p._describe(Exception("The model does not exist"))
     assert "gpt-9-imaginary" in shown
     assert len(shown) < 260
+
+
+def test_the_two_defaults_agree():
+    """
+    The code default and the shipped settings.json disagreed: the file said
+    "no replies", the code said "replies". A user whose settings predated the
+    key fell through to the code default and got the opposite of what shipping
+    intended -- a model call on every sentence, unasked.
+    """
+    import json
+    from pathlib import Path
+    from src.SettingsManager import SettingsManager
+    from src.config import PathConfig
+
+    shipped = json.loads(
+        (Path(PathConfig.get_config_path()) / "settings.json").read_text())
+    for key in ("record_only_mode", "diarization", "speaker_count", "profile"):
+        if key in shipped and key in SettingsManager.DEFAULT_SETTINGS:
+            assert shipped[key] == SettingsManager.DEFAULT_SETTINGS[key], \
+                f"{key}: shipped {shipped[key]!r} vs code " \
+                f"{SettingsManager.DEFAULT_SETTINGS[key]!r}"

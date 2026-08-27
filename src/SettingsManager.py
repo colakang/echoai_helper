@@ -26,7 +26,13 @@ class SettingsManager:
         "knowledge": "none",
         "window_opacity": 1.0,
         "window_topmost": False,
-        "record_only_mode": False,  # 添加新设置项
+        # True means "do not ask a model for replies". The default suppresses
+        # them, because turning them on spends money on every sentence the far
+        # end speaks and nobody should discover that by accident. It also has
+        # to agree with the shipped settings.json, which it did not: a user
+        # whose file predated this key fell through to the code default and
+        # got the opposite of what the shipped one says.
+        "record_only_mode": True,
         "diarization": False,
         # 0 = work it out; otherwise the number of people on the call.
         "speaker_count": 0,
