@@ -32,8 +32,9 @@ language model to clean up the finished transcript.
 - **Automatic language detection** — Mandarin, Cantonese, English, Japanese and
   Korean, switching per utterance, including mid-sentence code-switching
 - **Both sides of the call** — your microphone and the far end, on separate tracks
-- **Speaker labelling** — voices on the far-end track are told apart, with the
-  number of people configurable when you know it
+- **Speaker labelling** — voices on the far-end track are told apart as the
+  meeting runs, and re-grouped properly at export once you give it the real
+  headcount
 - **Pause-based segmentation** — sentences are cut where people actually pause,
   not on a fixed timer, so the model sees whole utterances
 - **Crash-safe recording** — every settled sentence is written to disk as it is
@@ -255,10 +256,16 @@ in Zoom or WeChat silences your outgoing audio, not this app's own input stream.
 Use **Pause Mic**. It resets to off every launch, deliberately: a pause that
 survived a restart would look like recording and not be.
 
-**More speakers than people.** Voice prints drift with volume and connection
-quality, so one person can end up split across several labels. Set the number of
-people before the meeting, or merge them at export — the export carries the voice
-prints, so this works after the fact.
+**More speakers than people.** Expected during the meeting, and fixable
+afterwards. A voice print reflects what is being said as much as who is saying
+it, so the same person reading out a number and the same person talking come
+back as different speakers. Set the number of people before the meeting, or
+merge at export, where all the prints are clustered together instead of one
+utterance at a time.
+
+The prints are recorded whether or not speaker labels are switched on, so
+turning labels off does not cost you the ability to sort the speakers out
+later.
 
 ---
 
@@ -285,9 +292,28 @@ routing, what has been measured, and where the sharp edges are.
   invalidates every open stream — so the far-end track is rebuilt too, whether
   or not anything was wrong with it. Measured at 378ms. It buys back a
   microphone track that would otherwise be dead for the rest of the call.
-- **Speaker labelling is tuned against a clean two-party recording** and
-  over-splits on group calls over a lossy connection. Merging at export is the
-  workaround, not the cure.
+- **Live speaker labels are a rough guide; the export is where they are
+  settled.** Measured on one speaker replayed through the app, the voice print
+  depends on *what* is being said, not only on who is saying it: two turns of
+  ordinary speech score 0.741 against each other, two turns of read-out digits
+  score 0.746 — and the same person's speech against their own digits scores
+  **0.473**, below the threshold that decides "same speaker". 82% of
+  same-person pairs across different content are judged to be different people.
+
+  No threshold fixes that. On the same recording the same-person range
+  (0.276–0.988) sits entirely inside the different-person range (0.276–0.820),
+  so every setting either splits one person or merges two.
+
+  What does work is re-clustering at export, which sees all the voice prints
+  at once and is given the real number of people, rather than deciding one
+  utterance at a time. **Set the headcount before the meeting, or merge at
+  export** — the voice prints are recorded either way, including when speaker
+  labels are switched off.
+
+  Utterances shorter than 2 seconds carry no voice print at all and cannot be
+  re-grouped afterwards. There is nothing measurable in audio that short; the
+  gate is set where a speaker starts matching themselves more than they match
+  a stranger.
 - **The Windows capture path is untested** since the segmentation rework. Its
   detector threshold was lowered to pass silence through, because segmentation
   now happens on pauses and a recogniser that only reports speech never delivers

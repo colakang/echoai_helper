@@ -475,7 +475,6 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         "Knowledge Base": (knowledge_files, "knowledge")
     }
     template_imports = {}
-    record_only_checkbox = None
 
     template_vars = {}
     template_menus = {}
@@ -532,6 +531,12 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         import_button.grid(row=row, column=1, padx=(0, 5), pady=1, sticky="w")
         template_imports[setting_key] = import_button
         row += 1
+
+    template_hint = ctk.CTkLabel(
+        main_control_frame,
+        text="used for the reply suggestions",
+        font=("Arial", 9), text_color="#8a8a8a")
+    template_hint.grid(row=row, column=0, padx=5, pady=(0, 2), sticky="w")
 
     def on_selection_change(*args):
         """处理模板选择变化"""
@@ -702,21 +707,19 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
     )
     profile_hint.grid(row=1, column=2, columnspan=1, padx=5, pady=(0, 2), sticky="w")
 
-    def _apply_template_availability(*_):
-        """
-        The prompt templates feed the reply suggestions and nothing else, so
-        they are live exactly when replies are.
-
-        Keyed to the replies switch rather than to the mode. Tying it to the
-        mode looked tidier and was wrong: answering during a meeting is a
-        supported use, not an accident, and disabling the persona controls
-        there would have made it unusable.
-        """
-        wants_replies = not record_only_var.get()
-        state = "normal" if wants_replies else "disabled"
-        for widget in (list(template_menus.values())
-                       + list(template_imports.values())):
-            widget.configure(state=state)
+    # The prompt templates are deliberately always available.
+    #
+    # They were briefly greyed out when replies were off, which is logically
+    # right -- nothing reads them then -- and awful in practice: replies ship
+    # off by default, so the controls for configuring replies were disabled
+    # out of the box, with nothing on screen to say why. Hiding the settings
+    # for a feature behind that feature being on is a trap.
+    #
+    # They were also briefly greyed out outside interview mode, before it was
+    # settled that answering during a meeting is a supported use and needs a
+    # persona, a case and a knowledge base just as much.
+    #
+    # A hint says what they affect. Nothing needs disabling.
 
     def on_profile_change(label):
         profile = profiles.by_label(label)
@@ -831,7 +834,6 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         is_record_only = record_only_var.get()
         SystemConfig.set_record_only_mode(is_record_only)
         settings_manager.update_setting("record_only_mode", is_record_only)
-        _apply_template_availability()
 
     record_only_checkbox = ctk.CTkCheckBox(
         controls_frame,
@@ -844,7 +846,6 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         checkbox_height=16
     )
     record_only_checkbox.pack(side="left", padx=(0, 5))  # 减少右侧padding
-    _apply_template_availability()
 
     # Speaker labelling. Only meaningful on the far-end track, which carries
     # everyone in the meeting; costs one voice embedding per utterance.
@@ -871,6 +872,13 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         checkbox_height=16,
     )
     diarize_checkbox.pack(side="left", padx=(0, 5))
+    # Says what the checkbox cannot: the labels shown live are provisional, and
+    # the accurate ones come from re-clustering at export with the headcount.
+    # Without this someone reasonably reads three labels as three people.
+    diarize_hint = ctk.CTkLabel(
+        controls_frame, text="(rough live; set people, merge at export)",
+        font=("Arial", 9), text_color="#8a8a8a")
+    diarize_hint.pack(side="left", padx=(0, 5))
 
     # Stop transcribing your own microphone.
     #

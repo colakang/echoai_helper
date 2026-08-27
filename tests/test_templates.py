@@ -166,41 +166,37 @@ def test_the_transcriber_uses_that_gate_and_not_the_checkbox_alone():
     assert "get_record_only_mode()" not in body
 
 
-def test_the_templates_follow_the_replies_switch_not_the_mode():
+def test_the_template_controls_are_never_disabled():
     """
-    They feed the replies and nothing else, so they are live exactly when
-    replies are. Keying them to the mode looked tidier and was wrong: it
-    disabled the persona controls during a meeting, where answering is a
-    supported use.
+    They were greyed out twice, on two different conditions, and both were
+    wrong in practice.
+
+    Keying them to the mode disabled the persona during a meeting, where
+    answering is a supported use. Keying them to the replies switch disabled
+    them out of the box, because replies ship off -- so the controls for
+    configuring replies were unusable until you found the switch that turned
+    on the thing they configure, with nothing on screen saying so.
+
+    Configuring a persona is harmless whether or not replies are on. A hint
+    says what they affect; nothing needs hiding.
     """
     import inspect
     from src import app
     body = inspect.getsource(app.create_ui_components)
-    # Slice to the end of the nested function, not a fixed number of
-    # characters -- a fixed window ran past it into unrelated code.
-    handler = body.split("def _apply_template_availability", 1)[1]
-    handler = handler.split("\n    def ", 1)[0]
-    assert "record_only_var.get()" in handler
-    assert "profile.key" not in handler
-    assert '"disabled"' in handler
-    # Both the dropdowns and the import buttons, or someone can still import
-    # into a state that will never read it.
-    assert "template_menus" in handler and "template_imports" in handler
+    assert "_apply_template_availability" not in body
+    assert "used for the reply suggestions" in body
 
 
 # --------------------------------------------------------------------------
 # Braces in an imported template
 # --------------------------------------------------------------------------
 #
-# Only two placeholders are supported, and they are substituted by name. The
-# code used to call str.format(), which interprets every brace in the file.
-# That was survivable while the only templates were the two shipped ones, and
-# stopped being survivable the moment templates could be imported -- a prompt
-# is exactly the kind of text that contains braces on purpose.
-#
-# Each of these used to leave the role unchanged while the dropdown showed the
-# new selection, so the app went on using the previous persona while appearing
-# to have switched.
+# Only two placeholders are supported, substituted by name. The code used to
+# call str.format(), which interprets every brace in the file -- survivable
+# while the only templates were the shipped two, and not once templates could
+# be imported: a prompt is exactly the kind of text that contains braces on
+# purpose. Each case below used to leave the role unchanged while the dropdown
+# showed the new selection.
 
 @pytest.mark.parametrize("hazard,description", [
     ('{"role": "user"}', "a JSON example in the prompt"),
