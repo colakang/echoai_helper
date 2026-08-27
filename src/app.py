@@ -1046,7 +1046,12 @@ def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
     if not hasattr(backend, "restart_capture"):
         return          # Windows: WASAPI holds its own device handle
 
-    state = {"recorders": dict(recorders), "backoff": 0.0}
+    # Each rebuild costs the far-end recording a ~378ms gap, because restarting
+    # PortAudio invalidates every stream. A retry that keeps failing must
+    # therefore stop being cheap to repeat: backing off at a fixed 30s once cut
+    # a hole in the recording twice a minute, for an hour, achieving nothing.
+    state = {"recorders": dict(recorders), "backoff": 0.0, "failures": 0}
+    RETRY_MIN, RETRY_MAX = 30, 600
 
     def watch():
         while not _shutting_down.is_set():
@@ -1088,12 +1093,16 @@ def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
                 rebuilt = state["recorders"].get("You")
                 if rebuilt is None:
                     # CoreAudio said there was a microphone and PortAudio could
-                    # not open it. Back off so a device stuck half-present does
-                    # not rebuild the audio stack on every pass.
-                    state["backoff"] = time.monotonic() + 30
-                    print("[WARN] You: could not open a microphone — "
-                          "retrying in 30s")
+                    # not open it. Back off further each time: something that
+                    # has failed repeatedly is unlikely to succeed on the next
+                    # pass, and every attempt costs the far-end recording.
+                    state["failures"] += 1
+                    wait = min(RETRY_MIN * 2 ** (state["failures"] - 1), RETRY_MAX)
+                    state["backoff"] = time.monotonic() + wait
+                    print(f"[WARN] You: could not open a microphone — "
+                          f"retrying in {wait}s")
                 else:
+                    state["failures"] = 0
                     print(f"[INFO] You: capture restored on "
                           f"{rebuilt.source.device_name!r}")
                     if on_rebuilt is not None:
@@ -1101,7 +1110,9 @@ def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
             except Exception as exc:
                 # Never fatal. A failed recovery is bad; taking the meeting
                 # down with it would be worse.
-                state["backoff"] = time.monotonic() + 30
+                state["failures"] += 1
+                state["backoff"] = time.monotonic() + min(
+                    RETRY_MIN * 2 ** (state["failures"] - 1), RETRY_MAX)
                 print(f"[WARN] could not rebuild capture: {exc}")
 
     # Three ways this process ends, and the thread has to stop for all of them:
