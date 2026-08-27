@@ -41,50 +41,84 @@ def _is_no_response(text: str) -> bool:
     return text.strip().strip(".").casefold() in ("none", "")
 
 
-# Diarization labels as _identify_speaker writes them: S1, S12, and S3? when
-# the match was uncertain.
-_SPEAKER_LABEL = re.compile(r"^\s*S\d+\??\s*[:：]\s*")
+# How the transcript pane renders one line: "Speaker: [S1: hello]" or
+# "You: [hello]". The track name and brackets are the widget's; the S1 is the
+# diarization label.
+_DISPLAY_LINE = re.compile(
+    r"^\s*(?P<track>Speaker|You)\s*[:：]\s*\[(?P<body>.*)\]\s*$")
+_SPEAKER_LABEL = re.compile(r"^\s*S(?P<n>\d+)(?P<doubt>\??)\s*[:：]\s*")
 
-# How the transcript pane renders a line: "Speaker: [S1: hello]". Both parts
-# are presentation -- the track name and the brackets belong to the widget.
-_DISPLAY_LINE = re.compile(r"^\s*(?:Speaker|You)\s*[:：]\s*\[(?P<body>.*)\]\s*$")
+# What the operator is called in the prompt. "You" is the track's name and
+# would be read as addressing the model.
+ME = "Me"
 
 
 def _utterance_only(text: str) -> str:
     """
-    Reduce a transcript line, or several, to the words that were spoken.
+    Rewrite transcript lines so the model can tell who said what.
 
-    Two layers of presentation sit on top of them, and neither may reach the
-    model:
+    Attribution used to be stripped entirely, which fixed one problem and
+    caused another. The problem it fixed: "S2: 零七七" read as a single
+    sentence, and the model welded the label into the digits and reported a
+    service number of S3099 that nobody had said. The problem it caused: in a
+    meeting the passage holds two or three people plus the operator, and with
+    the attribution gone the model cannot tell whose question it is answering,
+    or that one of those voices is the person it is writing for.
 
-        Speaker: [S2: 零七七]
-        ^^^^^^^^^^          the pane's own formatting
-                 ^^^^       the diarization label
+    So the attribution stays and is made unmistakable instead. "S2" looks like
+    a code that could belong to a reference number; "Speaker 2" does not, and
+    "Me" marks the operator's own turns as distinct from everyone else's.
 
-    The label matters most. The model reads it as part of the sentence, and on
-    a customer-service call that means inventing reference numbers -- "S2" and
-    "零七七" came back as service number S3099, which nobody said.
+        Speaker: [S1: 你好]     ->  Speaker 1: 你好
+        Speaker: [S2?: 零七七]  ->  Speaker 2 (unsure): 零七七
+        You: [稍等]             ->  Me: 稍等
 
-    Applied per line rather than to the whole string: a passage picked out of
-    the transcript is several lines, and an anchored pattern without MULTILINE
-    cleans only the first one -- which looked like it worked for as long as
-    every question was a single utterance.
-
-    Stripped here rather than at the source, because both layers genuinely
-    belong where they are. It is only the model that must not see them.
+    Per line, because a picked passage is several of them and an anchored
+    pattern without MULTILINE cleans only the first -- which looked correct for
+    as long as every question was one utterance.
     """
-    lines = []
+    return "\n".join(f"{who}: {said}" for who, said in _attributed(text))
+
+
+def _spoken_words(text: str) -> str:
+    """
+    Just what was said, with every attribution removed.
+
+    Used for the length filter, which exists to stop the automatic path
+    answering "嗯" -- and which the attribution would defeat, because
+    "Speaker: 嗯" is comfortably long enough to pass a test aimed at "嗯".
+    """
+    return " ".join(said for _, said in _attributed(text))
+
+
+def _attributed(text: str):
+    """Yield (who, what) for each non-empty transcript line."""
     for line in (text or "").splitlines():
         display = _DISPLAY_LINE.match(line)
         if display:
-            line = display.group("body")
-        line = _SPEAKER_LABEL.sub("", line).strip()
-        if line:
-            lines.append(line)
-    return "\n".join(lines)
+            track, body = display.group("track"), display.group("body")
+        else:
+            track, body = "Speaker", line
+
+        label = _SPEAKER_LABEL.match(body)
+        if label:
+            body = body[label.end():]
+            who = f"Speaker {label.group('n')}"
+            if label.group("doubt"):
+                who += " (unsure)"
+        else:
+            who = ME if track == "You" else "Speaker"
+
+        body = body.strip()
+        if body:
+            yield who, body
 
 
 class GPTResponder:
+    # Class-level default, so an instance built without going through __init__
+    # -- as tests do when they only need the answering logic -- still has one.
+    session_provider = None
+
     def __init__(self, response_manager, session_provider=None):
         self.response_manager = response_manager
         # Looked up when an answer completes rather than held, because the
@@ -367,11 +401,16 @@ class GPTResponder:
         # Only show "Thinking..." once the question has cleared the length
         # filter. Setting it unconditionally left it on screen forever
         # whenever the generator returned early on a too-short utterance.
+        # Measured before attribution is added, not after: "Speaker: 嗯" is
+        # comfortably long enough to pass a filter that exists to reject "嗯",
+        # and running the check on the rewritten string defeats it entirely.
+        spoken = _spoken_words(question_text)
+
         question_text = _utterance_only(question_text)
         previous_question = _utterance_only(previous_question)
 
-        if require_length and not _worth_answering(question_text):
-            print("Skipping: too short ({} chars)".format(len(question_text.strip())))
+        if require_length and not _worth_answering(spoken):
+            print("Skipping: too short ({} chars)".format(len(spoken.strip())))
             return
 
         self.response = "Thinking..."

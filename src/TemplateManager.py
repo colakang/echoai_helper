@@ -75,6 +75,35 @@ class TemplateManager:
         return name
 
     @classmethod
+    def delete_template(cls, category: str, name: str) -> Optional[str]:
+        """
+        Remove one of the user's own templates. Returns why not, or None.
+
+        Only theirs. The shipped ones live inside the package -- deleting from
+        site-packages is somebody else's business, a reinstall would bring it
+        back, and a user who removed the last shipped role would be left with
+        an app that cannot assemble a prompt at all.
+        """
+        if category not in cls.EXTENSIONS:
+            return f"Unknown category: {category}"
+
+        directory, ext = cls._get_user_paths()[category]
+        path = os.path.join(directory, f"{name}{ext}")
+        if not os.path.exists(path):
+            shipped, _ = cls._get_template_paths()[category]
+            if os.path.exists(os.path.join(shipped, f"{name}{ext}")):
+                return (f"{name!r} came with the app and cannot be deleted. "
+                        f"Only templates you imported can.")
+            return f"No template called {name!r}."
+
+        try:
+            os.remove(path)
+        except OSError as e:
+            return f"Could not delete {name!r}: {e}"
+        print(f"[INFO] Deleted {category} template {name!r}")
+        return None
+
+    @classmethod
     def resolve_template(cls, category: str, name: str) -> Optional[str]:
         """
         The file backing a template name, preferring the user's own.

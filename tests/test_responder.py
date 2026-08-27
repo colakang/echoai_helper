@@ -197,98 +197,107 @@ def test_thinking_resolves_when_the_model_returns_nothing():
 
 
 # --------------------------------------------------------------------------
-# Speaker labels must not reach the model
+# The model has to be told who said what
 # --------------------------------------------------------------------------
 #
-# Found by playing a real customer-service recording through the app. The
-# transcript reads "S2: 零七七" because the interface and the export both want
-# to show who spoke; the model read the label as part of the sentence and
-# reported the caller's service number as "S3099" -- a number nobody said.
+# Attribution was briefly stripped altogether. That fixed one problem and
+# caused another.
 #
-# On a call about a reference number, an invented one is worse than no answer.
+# Fixed: "S2: 零七七" read as one sentence, and the model welded the label into
+# the digits and reported a service number of S3099 that nobody had said.
+#
+# Caused: in a meeting the passage holds two or three people plus the
+# operator, and with the attribution gone the model cannot tell whose question
+# it is answering, or that one of those voices belongs to the person it is
+# writing for.
+#
+# So it stays, in a form that cannot be mistaken for content: "S2" looks like
+# a code that might belong to a reference number, "Speaker 2" does not.
 
-from src.GPTResponder import _utterance_only                      # noqa: E402
+from src.GPTResponder import _utterance_only                       # noqa: E402
 
 
-@pytest.mark.parametrize("labelled,expected", [
-    ("S2: 零七七", "零七七"),
-    ("S1: hello there", "hello there"),
-    ("S12: hello", "hello"),
-    ("S3?: uncertain match", "uncertain match"),
-    ("S3? : spaced", "spaced"),
-    ("S2：全角冒号", "全角冒号"),
+@pytest.mark.parametrize("line,expected", [
+    ("Speaker: [S1: hello]", "Speaker 1: hello"),
+    ("Speaker: [S12: hello]", "Speaker 12: hello"),
+    ("Speaker: [S2: 零七七]", "Speaker 2: 零七七"),
+    ("Speaker: [S2：全角冒号]", "Speaker 2: 全角冒号"),
 ])
-def test_a_diarization_label_is_removed(labelled, expected):
-    assert _utterance_only(labelled) == expected
+def test_a_label_becomes_a_name(line, expected):
+    assert _utterance_only(line) == expected
 
 
-@pytest.mark.parametrize("untouched", [
-    "零七七",
-    "S 前面没有编号",
-    "Speaker: this is not a label",
-    "SQL: how do I index this",
-    "",
-])
-def test_ordinary_text_is_left_alone(untouched):
+def test_an_uncertain_match_says_so():
     """
-    Only the exact shape the diarizer writes is stripped. "SQL:" opening an
-    answer, or a sentence that merely starts with S, must survive -- the point
-    is to remove a machine's annotation, not to edit what was said.
+    The registry marks a blended or borderline segment with a "?". Passing
+    that through as doubt is better than presenting it as fact -- the model
+    can weigh what was said against a label it has been told to distrust.
     """
-    assert _utterance_only(untouched) == untouched.strip()
+    assert _utterance_only("Speaker: [S3?: 零九九]") == "Speaker 3 (unsure): 零九九"
 
 
-def test_the_label_is_kept_in_the_transcript():
+def test_the_operator_is_distinguished_from_everyone_else():
     """
-    Stripped at the model, not at the source. The interface and the export both
-    want to show who spoke; it is only the model that must not see it.
+    The reply being drafted is theirs. Without this the model cannot tell
+    which of the voices it is writing for, and answers as a bystander.
     """
-    import inspect
-    from src import AudioTranscriber as module
-    body = inspect.getsource(module.AudioTranscriber._finalize_segment)
-    assert 'display = f"{label}: {text}"' in body
+    assert _utterance_only("You: [稍等啊]") == "Me: 稍等啊"
 
 
-# --------------------------------------------------------------------------
-# Multi-line passages, and the pane's own formatting
-# --------------------------------------------------------------------------
-#
-# Found by picking several turns and answering them. The passage comes out of
-# the transcript pane, so it carries two layers of presentation:
-#
-#     Speaker: [S2: 零七七]
-#     ^^^^^^^^^^            the widget's formatting
-#              ^^^^         the diarization label
-#
-# Both reached the model. The label had already been fixed for the automatic
-# path and came straight back through the manual one, on the same kind of
-# input -- read-out digits, where a stray "S2" becomes part of an invented
-# reference number.
-
-def test_the_panes_formatting_is_removed():
-    assert _utterance_only("Speaker: [S1: 你好]") == "你好"
-    assert _utterance_only("You: [S2?: 零九九。]") == "零九九。"
+def test_a_multi_party_passage_keeps_every_attribution():
+    passage = "Speaker: [S1: 一]\nYou: [二]\nSpeaker: [S2: 三]"
+    assert _utterance_only(passage) == "Speaker 1: 一\nMe: 二\nSpeaker 2: 三"
 
 
-def test_every_line_is_cleaned_not_only_the_first():
+def test_every_line_is_handled_not_only_the_first():
     """
-    The pattern is anchored, and without MULTILINE it cleans one line. That
-    looked correct for as long as every question was a single utterance --
-    which it was, until turns could be picked.
+    The patterns are anchored, and without MULTILINE only the first line is
+    rewritten. That looked correct for as long as every question was a single
+    utterance -- which it was, until turns could be picked.
     """
     passage = "Speaker: [S1: 一]\nSpeaker: [S2: 二]\nSpeaker: [S3: 三]"
-    assert _utterance_only(passage) == "一\n二\n三"
+    assert _utterance_only(passage).count("Speaker ") == 3
 
 
-def test_a_line_with_no_label_survives_intact():
-    assert _utterance_only("Speaker: [没有标签的一行]") == "没有标签的一行"
+def test_an_unlabelled_line_is_still_attributed():
+    """Diarization off, or a segment too short to identify."""
+    assert _utterance_only("Speaker: [没有标签]") == "Speaker: 没有标签"
 
 
-def test_plain_text_is_untouched():
-    assert _utterance_only("零七七") == "零七七"
-    assert _utterance_only("SQL: how do I index this") == "SQL: how do I index this"
+def test_blank_separators_are_dropped():
+    """The pane puts them between turns; they are not part of the question."""
+    passage = "Speaker: [S1: 一]\n\nSpeaker: [S2: 二]"
+    assert _utterance_only(passage) == "Speaker 1: 一\nSpeaker 2: 二"
 
 
-def test_blank_lines_are_dropped():
-    """The pane separates turns with them; they are not part of the question."""
-    assert _utterance_only("Speaker: [S1: 一]\n\nSpeaker: [S2: 二]") == "一\n二"
+def test_the_attribution_is_explained_to_the_model():
+    """
+    A convention the model has to guess at is a convention that will be
+    misread. The rules say what the prefixes mean, that the numbers come from
+    an imperfect voice match, and whose line to write.
+    """
+    from src.prompts import RESPONSE_RULES
+    assert "Speaker 1" in RESPONSE_RULES
+    assert "Me" in RESPONSE_RULES
+    assert "not as fact" in RESPONSE_RULES
+
+
+def test_the_length_filter_measures_the_words_not_the_attribution():
+    """
+    The filter exists to stop the automatic path answering "嗯". Adding an
+    attribution first defeats it: "Speaker: 嗯" is comfortably long enough to
+    pass a test aimed at a single character, so every piece of backchannel
+    would have become a model call.
+    """
+    from src.GPTResponder import _spoken_words
+    assert _spoken_words("Speaker: [S1: 嗯]") == "嗯"
+    assert _spoken_words("ok") == "ok"
+
+
+def test_it_is_measured_before_the_attribution_is_added():
+    """Order matters, and getting it backwards is silent."""
+    import inspect
+    from src.GPTResponder import GPTResponder
+    body = inspect.getsource(GPTResponder._answer)
+    assert (body.index("_spoken_words(question_text)")
+            < body.index("question_text = _utterance_only(question_text)"))

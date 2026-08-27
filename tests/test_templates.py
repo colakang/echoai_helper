@@ -756,3 +756,62 @@ def test_picks_are_cleared_once_answered():
     from src import app
     body = inspect.getsource(app.create_ui_components)
     assert "on_done=transcript_ui.clear_picks" in body
+
+
+# --------------------------------------------------------------------------
+# Deleting a template
+# --------------------------------------------------------------------------
+
+def test_a_template_you_imported_can_be_deleted(user_templates, tmp_path):
+    source = tmp_path / "mine.txt"
+    source.write_text("x", encoding="utf-8")
+    name = TemplateManager.import_template("knowledge", str(source))
+
+    assert TemplateManager.delete_template("knowledge", name) is None
+    assert name not in TemplateManager.get_template_files("knowledge")
+
+
+def test_a_shipped_template_cannot_be_deleted(user_templates):
+    """
+    They live inside the package. Deleting from site-packages is somebody
+    else's business, a reinstall would bring it back, and removing the last
+    shipped role would leave an app that cannot assemble a prompt at all.
+    """
+    problem = TemplateManager.delete_template("knowledge", "none")
+    assert problem and "came with the app" in problem
+    assert "none" in TemplateManager.get_template_files("knowledge")
+
+
+def test_deleting_something_absent_explains_rather_than_raising(user_templates):
+    problem = TemplateManager.delete_template("knowledge", "nope")
+    assert problem and "No template" in problem
+
+
+def test_a_user_template_shadowing_a_shipped_one_can_be_removed(user_templates, tmp_path):
+    """Deleting theirs uncovers the shipped one again rather than losing both."""
+    source = tmp_path / "none.txt"
+    source.write_text("mine", encoding="utf-8")
+    TemplateManager.import_template("knowledge", str(source))
+    assert open(TemplateManager.resolve_template("knowledge", "none")).read() == "mine"
+
+    assert TemplateManager.delete_template("knowledge", "none") is None
+    assert "none" in TemplateManager.get_template_files("knowledge")
+    assert open(TemplateManager.resolve_template("knowledge", "none")).read() != "mine"
+
+
+def test_the_ui_confirms_before_deleting():
+    """It cannot be undone, and the dropdown gives no clue which are yours."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    handler = body.split("def make_remover", 1)[1][:900]
+    assert "askyesno" in handler
+
+
+def test_the_ui_moves_off_the_deleted_template():
+    """Leaving it selected would apply a template that no longer exists."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    handler = body.split("def make_remover", 1)[1][:900]
+    assert "target_var.set(" in handler

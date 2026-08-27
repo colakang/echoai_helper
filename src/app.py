@@ -475,6 +475,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         "Knowledge Base": (knowledge_files, "knowledge")
     }
     template_imports = {}
+    template_deletes = {}
 
     template_vars = {}
     template_menus = {}
@@ -497,11 +498,11 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
             width=160,
             height=dropdown_height,  # 新增这行
         )
-        # Leave room on the right for the import button, which belongs beside
-        # its own dropdown. It was briefly in column 1, on top of the action
-        # buttons -- small enough to still be clickable, which is how that
-        # survived being noticed.
-        menu.grid(row=row, column=0, padx=(80, 34), pady=1, sticky="e")
+        # Leave room on the right for the import and delete buttons, which
+        # belong beside their own dropdown. They were briefly in column 1, on
+        # top of the action buttons -- small enough to still be clickable,
+        # which is how that survived being noticed.
+        menu.grid(row=row, column=0, padx=(80, 60), pady=1, sticky="e")
         template_vars[setting_key] = var
         template_menus[setting_key] = menu
 
@@ -532,8 +533,32 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
             main_control_frame, text="+", width=26, height=dropdown_height,
             command=make_importer(),
             fg_color="#2B4C7E")
-        import_button.grid(row=row, column=0, padx=(0, 5), pady=1, sticky="e")
+        import_button.grid(row=row, column=0, padx=(0, 31), pady=1, sticky="e")
         template_imports[setting_key] = import_button
+
+        def make_remover(category=setting_key, target_menu=menu, target_var=var):
+            def do_delete():
+                name = target_var.get()
+                if not messagebox.askyesno(
+                        "Delete template",
+                        f"Delete the {category.replace('_', ' ')} template "
+                        f"{name!r}?\n\nThis cannot be undone."):
+                    return
+                problem = TemplateManager.delete_template(category, name)
+                if problem:
+                    messagebox.showwarning("Not deleted", problem)
+                    return
+                names = TemplateManager.get_template_files(category)
+                target_menu.configure(values=names or ["none"])
+                # Move off the deleted one, which applies the replacement.
+                target_var.set(names[0] if names else "none")
+            return do_delete
+
+        delete_button = ctk.CTkButton(
+            main_control_frame, text="\u2212", width=26, height=dropdown_height,
+            command=make_remover(), fg_color="#6B2737")
+        delete_button.grid(row=row, column=0, padx=(0, 5), pady=1, sticky="e")
+        template_deletes[setting_key] = delete_button
         row += 1
 
     template_hint = ctk.CTkLabel(
