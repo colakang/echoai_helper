@@ -24,6 +24,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.audio.backend import AudioSource, Recorder
 from src.config import AudioConfig
 
+sd = pytest.importorskip("sounddevice", reason="macOS capture backend")
+from src.audio import macos                                       # noqa: E402
+
+
+def make_recorder(name, index):
+    return macos.SoundDeviceRecorder(AudioSource(16000, 2, 1, name), "You", index)
+
 
 class FakeRecorder(Recorder):
     """A Recorder that records what it was asked to emit."""
@@ -309,3 +316,68 @@ def test_startup_wires_the_heartbeat_to_both_tracks():
     body = inspect.getsource(app.main)
     call = body.split("_start_mic_heartbeat(", 1)[1][:300]
     assert '"You"' in call and '"Speaker"' in call
+
+
+# --------------------------------------------------------------------------
+# None is the case that needs work, not the case to skip
+# --------------------------------------------------------------------------
+#
+# Written three times in this area and wrong all three: `if recorder is None:
+# continue`, in the device follower, in the heartbeat loop, and in
+# restart_capture. None means "this track has no capture right now", which is
+# precisely the state every one of those functions exists to repair. Skipping
+# it meant a microphone that died, or that was absent at startup, could never
+# come back -- while the retry kept firing, tearing down the far-end stream on
+# every attempt to achieve nothing, because it could not succeed by
+# construction.
+
+def test_a_track_with_no_recorder_is_rebuilt(monkeypatch):
+    """
+    The bug, stated directly: asked to restart a track whose recorder is None,
+    the backend must build one rather than hand the None back.
+    """
+    backend = macos.MacOSAudioBackend()
+    started = {}
+
+    def fake_build(index, name):
+        rec = make_recorder("NexiGo Air T2", index)
+        rec.record_into_queue = lambda q: started.__setitem__(name, q)
+        return rec
+
+    monkeypatch.setattr(backend, "_build", fake_build)
+    monkeypatch.setattr(macos, "preferred_mic",
+                        lambda: {"index": 0, "name": "NexiGo Air T2"})
+    monkeypatch.setattr(macos.sd, "_terminate", lambda: None)
+    monkeypatch.setattr(macos.sd, "_initialize", lambda: None)
+
+    result = backend.restart_capture({"You": None}, {"You": "mic-queue"})
+
+    assert result["You"] is not None, "a None track must be rebuilt, not skipped"
+    assert started["You"] == "mic-queue"
+
+
+def test_restart_capture_does_not_test_a_recorder_for_none():
+    """
+    Guarding the shape rather than one instance of it, because the same line
+    has been written three times in three functions. Whether a track currently
+    has a recorder says nothing about whether it should get one.
+    """
+    import inspect
+    body = inspect.getsource(macos.MacOSAudioBackend.restart_capture)
+    loop = body.split("rebuilt = {}", 1)[1]
+    assert "recorder is None" not in loop
+    assert "for name in recorders" in loop
+
+
+def test_a_failing_retry_backs_off_further_each_time():
+    """
+    Every attempt costs the far-end recording a ~378ms gap. A fixed retry once
+    cut a hole in the recording twice a minute for an hour without ever
+    succeeding.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._start_mic_heartbeat)
+    assert "RETRY_MAX" in body
+    assert '2 ** (state["failures"] - 1)' in body
+    assert 'state["failures"] = 0' in body, "success must reset the backoff"

@@ -194,3 +194,126 @@ def test_thinking_resolves_when_the_model_returns_nothing():
 
     responder._answer("what is the quarterly revenue", rid)
     assert responder.response != "Thinking..."
+
+
+# --------------------------------------------------------------------------
+# The model has to be told who said what
+# --------------------------------------------------------------------------
+#
+# Attribution was briefly stripped altogether. That fixed one problem and
+# caused another.
+#
+# Fixed: "S2: 零七七" read as one sentence, and the model welded the label into
+# the digits and reported a service number of S3099 that nobody had said.
+#
+# Caused: in a meeting the passage holds two or three people plus the
+# operator, and with the attribution gone the model cannot tell whose question
+# it is answering, or that one of those voices belongs to the person it is
+# writing for.
+#
+# So it stays, in a form that cannot be mistaken for content: "S2" looks like
+# a code that might belong to a reference number, "Speaker 2" does not.
+
+from src.GPTResponder import _utterance_only                       # noqa: E402
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("Speaker: [S1: hello]", "Speaker 1: hello"),
+    ("Speaker: [S12: hello]", "Speaker 12: hello"),
+    ("Speaker: [S2: 零七七]", "Speaker 2: 零七七"),
+    ("Speaker: [S2：全角冒号]", "Speaker 2: 全角冒号"),
+])
+def test_a_label_becomes_a_name(line, expected):
+    assert _utterance_only(line) == expected
+
+
+def test_an_uncertain_match_says_so():
+    """
+    The registry marks a blended or borderline segment with a "?". Passing
+    that through as doubt is better than presenting it as fact -- the model
+    can weigh what was said against a label it has been told to distrust.
+    """
+    assert _utterance_only("Speaker: [S3?: 零九九]") == "Speaker 3 (unsure): 零九九"
+
+
+def test_the_operator_is_distinguished_from_everyone_else():
+    """
+    The reply being drafted is theirs. Without this the model cannot tell
+    which of the voices it is writing for, and answers as a bystander.
+    """
+    assert _utterance_only("You: [稍等啊]") == "Me: 稍等啊"
+
+
+def test_a_multi_party_passage_keeps_every_attribution():
+    passage = "Speaker: [S1: 一]\nYou: [二]\nSpeaker: [S2: 三]"
+    assert _utterance_only(passage) == "Speaker 1: 一\nMe: 二\nSpeaker 2: 三"
+
+
+def test_every_line_is_handled_not_only_the_first():
+    """
+    The patterns are anchored, and without MULTILINE only the first line is
+    rewritten. That looked correct for as long as every question was a single
+    utterance -- which it was, until turns could be picked.
+    """
+    passage = "Speaker: [S1: 一]\nSpeaker: [S2: 二]\nSpeaker: [S3: 三]"
+    assert _utterance_only(passage).count("Speaker ") == 3
+
+
+def test_an_unlabelled_line_is_still_attributed():
+    """Diarization off, or a segment too short to identify."""
+    assert _utterance_only("Speaker: [没有标签]") == "Speaker: 没有标签"
+
+
+def test_blank_separators_are_dropped():
+    """The pane puts them between turns; they are not part of the question."""
+    passage = "Speaker: [S1: 一]\n\nSpeaker: [S2: 二]"
+    assert _utterance_only(passage) == "Speaker 1: 一\nSpeaker 2: 二"
+
+
+def test_the_attribution_is_explained_to_the_model():
+    """
+    A convention the model has to guess at is a convention that will be
+    misread. The rules say what the prefixes mean, that the numbers come from
+    an imperfect voice match, and whose line to write.
+    """
+    from src.prompts import RESPONSE_RULES
+    assert "Speaker 1" in RESPONSE_RULES
+    assert "Me" in RESPONSE_RULES
+    assert "not as fact" in RESPONSE_RULES
+
+
+def test_the_length_filter_measures_the_words_not_the_attribution():
+    """
+    The filter exists to stop the automatic path answering "嗯". Adding an
+    attribution first defeats it: "Speaker: 嗯" is comfortably long enough to
+    pass a test aimed at a single character, so every piece of backchannel
+    would have become a model call.
+    """
+    from src.GPTResponder import _spoken_words
+    assert _spoken_words("Speaker: [S1: 嗯]") == "嗯"
+    assert _spoken_words("ok") == "ok"
+
+
+def test_it_is_measured_before_the_attribution_is_added():
+    """Order matters, and getting it backwards is silent."""
+    import inspect
+    from src.GPTResponder import GPTResponder
+    body = inspect.getsource(GPTResponder._answer)
+    assert (body.index("_spoken_words(question_text)")
+            < body.index("question_text = _utterance_only(question_text)"))
+
+
+def test_the_rewrite_is_applied_exactly_once():
+    """
+    answer_passage used to run it too, for an emptiness check, and _answer
+    runs it again. The second pass does not recognise "Speaker 1: hello" as an
+    already-attributed line, so it attributed it again and the model received
+    "Speaker: Speaker 1: hello".
+
+    Emptiness is asked of the words instead, which changes nothing.
+    """
+    import inspect
+    from src.GPTResponder import GPTResponder
+    body = inspect.getsource(GPTResponder.answer_passage)
+    assert "_utterance_only(" not in body
+    assert "_spoken_words(" in body

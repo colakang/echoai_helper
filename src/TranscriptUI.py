@@ -67,8 +67,138 @@ class TranscriptUI:
 
     def _configure_textbox(self) -> None:
         """配置文本框的基本设置"""
-        self.textbox.configure(cursor="hand2")
+        # An I-beam, not a pointing hand. The hand said "click me", which is
+        # how the transcript reads as a list of clickable rows rather than as
+        # text you can drag across -- and dragging across it is how a passage
+        # gets chosen to be answered. Clicking a line still works; the cursor
+        # simply stops hiding the other half of what the widget does.
+        self.textbox.configure(cursor="xterm")
         self.text_widget.configure(state="normal")  # 确保文本可以选择
+
+        # exportselection defaults on, which hands the highlight to the system
+        # selection -- and the moment another widget claims that, Tk clears the
+        # sel tag. Selecting a passage and then pressing a button therefore
+        # destroyed the selection on the way to the handler, which read as the
+        # button not working.
+        self.text_widget.configure(exportselection=False)
+
+        # Remembered as well, because "I highlighted that, then pressed the
+        # button" should not depend on focus behaviour at all.
+        self._last_selection = ""
+        self.text_widget.bind("<ButtonRelease-1>", self._remember_selection,
+                              add="+")
+
+        # Picking individual turns, for the case dragging cannot express: the
+        # question you want answered is spread over several of your
+        # counterpart's turns with somebody else's in between, and a drag has
+        # to take that somebody else along.
+        #
+        # Deliberately manual rather than "select every turn labelled S1". The
+        # labels are not reliable enough to filter on -- the same speaker
+        # reading out a number and talking scores as two different people --
+        # so filtering by them would quietly drop half of what was wanted.
+        self.text_widget.tag_configure("picked", background="#2B4C7E")
+        for sequence in ("<Command-Button-1>", "<Control-Button-1>"):
+            self.text_widget.bind(sequence, self._toggle_turn, add="+")
+
+    def _toggle_turn(self, event):
+        """Add or remove the turn under the cursor from the picked set."""
+        try:
+            start = self.text_widget.index(f"@{event.x},{event.y} linestart")
+            end = self.text_widget.index(f"@{event.x},{event.y} lineend")
+        except Exception:
+            return "break"
+        if not self.text_widget.get(start, end).strip():
+            return "break"          # a blank separator line
+
+        already = [r for r in self.text_widget.tag_ranges("picked")]
+        for i in range(0, len(already), 2):
+            if str(already[i]) == str(start):
+                self.text_widget.tag_remove("picked", start, end)
+                return "break"
+        self.text_widget.tag_add("picked", start, end)
+        return "break"              # do not also run the show-response click
+
+    def picked_turns(self) -> str:
+        """
+        The turns picked one by one, oldest first.
+
+        Read from the tag rather than from remembered positions: Tk moves tags
+        when text is inserted above them, so a pick survives the meeting
+        carrying on underneath it.
+
+        Returned in the order they appear on screen. Putting them back into
+        the order they were spoken happens in one place, for both ways of
+        choosing -- see _chronological.
+        """
+        ranges = self.text_widget.tag_ranges("picked")
+        turns = []
+        for i in range(0, len(ranges), 2):
+            text = self.text_widget.get(ranges[i], ranges[i + 1]).strip()
+            if text:
+                turns.append(text)
+        return "\n".join(turns)
+
+    @staticmethod
+    def _chronological(passage: str) -> str:
+        """
+        Put a passage back into the order it was spoken.
+
+        This pane is newest first, so anything lifted out of it reads
+        backwards. That was handled for picked turns and not for a dragged
+        selection, so a dragged question arrived at the model in reverse --
+        which is not obviously wrong to look at, and quietly makes a
+        multi-turn question incoherent.
+
+        Done here rather than in each path, because getting it right in one of
+        two places is how it came to be wrong in the first place.
+        """
+        lines = [l for l in passage.splitlines() if l.strip()]
+        return "\n".join(reversed(lines))
+
+    def clear_picks(self) -> None:
+        try:
+            self.text_widget.tag_remove("picked", "1.0", "end")
+        except Exception:
+            pass
+
+    def _remember_selection(self, _event=None) -> None:
+        try:
+            text = self.text_widget.get("sel.first", "sel.last")
+        except Exception:
+            return          # a click with no drag; keep what was there
+        if text.strip():
+            self._last_selection = text
+
+    def selected_passage(self) -> str:
+        """
+        What the user highlighted, live or last time.
+
+        Turns picked individually win over a drag: picking is the more
+        deliberate act, and the only one that can leave somebody else's turn
+        out of the middle.
+
+        Falls back to the remembered selection rather than returning nothing:
+        the alternative is a button that works or does not depending on where
+        focus happens to be, which is indistinguishable from broken.
+        """
+        picked = self.picked_turns()
+        if picked.strip():
+            return self._chronological(picked)
+        try:
+            live = self.text_widget.get("sel.first", "sel.last")
+            if live.strip():
+                return self._chronological(live)
+        except Exception:
+            pass
+        return self._chronological(self._last_selection)
+
+    def forget_selection(self) -> None:
+        self._last_selection = ""
+        try:
+            self.text_widget.tag_remove("sel", "1.0", "end")
+        except Exception:
+            pass
         
     def toggle_debug(self, enabled: bool = None) -> None:
         """
@@ -116,14 +246,18 @@ class TranscriptUI:
             if new_records:
                 # 保存当前的选择状态和滚动位置
                 try:
-                    selection_start = self.text_widget.index("sel.first")
-                    selection_end = self.text_widget.index("sel.last")
+                    self.text_widget.index("sel.first")
                     has_selection = True
                 except:
                     has_selection = False
                 
-                current_pos = self.textbox.yview()[1]  # 使用底部位置
-                was_at_bottom = current_pos >= 0.9  # 如果接近底部就认为是在底部
+                # The newest line goes to the *top* -- this list is newest
+                # first -- so "following the conversation" means being near the
+                # top, not the bottom. The old test asked whether the view was
+                # near the end of the document, which is where the oldest lines
+                # are: it followed the newest arrivals precisely when the
+                # reader had scrolled back to read something older.
+                following_newest = self.textbox.yview()[0] <= 0.05
                 
                 # 临时启用文本框，以便更新新内容
                 self.text_widget.configure(state="normal")
@@ -187,14 +321,19 @@ class TranscriptUI:
                         insert_position = "1.0"
                         text = f"{record['type']}: [Catching...]\n\n"
                         self.text_widget.insert(insert_position, text)                                                   
-                self.text_widget.see("1.0")
-
-                # 恢复选择状态
-                if has_selection:
-                    try:
-                        self.text_widget.tag_add("sel", selection_start, selection_end)
-                    except:
-                        pass
+                # Follow the newest line only when the reader is already
+                # there. A meeting appends continuously, and jumping to the top
+                # on every arrival makes it impossible to read anything older,
+                # or to finish dragging across a passage -- which is how a
+                # question gets selected in order to be answered.
+                #
+                # The selection is deliberately not restored afterwards. Tk
+                # moves tags itself when text is inserted above them, so the
+                # old code -- capturing sel.first/sel.last, inserting at "1.0",
+                # then re-adding sel at the captured indices -- pointed the
+                # highlight at whatever had shifted into those positions.
+                if following_newest and not has_selection:
+                    self.text_widget.see("1.0")
 
                 # 更新完成后设置为可交互状态
                 self.text_widget.configure(state="normal")

@@ -4,6 +4,7 @@
 import math
 import os
 import threading
+import time
 import unicodedata
 from datetime import datetime, timedelta
 
@@ -51,6 +52,11 @@ def _vad_model_path() -> str:
 # Below this, SenseVoice's language detection is not reliable enough to
 # trust: measured misdetections at 0.7-1.7s, none above ~2s.
 LANGUAGE_TRUST_S = 2.0
+
+
+def _labels_wanted() -> bool:
+    """Whether speaker labels should be shown. Voice prints are taken either way."""
+    return AudioConfig.get_diarization()
 
 PHRASE_TIMEOUT = 5.2
 MAX_PHRASE_TIMEOUT = 30.2
@@ -154,6 +160,10 @@ class AudioTranscriber:
         # so nothing is paid unless diarization is switched on.
         self._embedder = SpeakerEmbedder(device=_asr_device())
         self._registries = {name: SpeakerRegistry() for name in self.audio_sources}
+
+        # The last speaker identified with confidence on each track, and when.
+        # Short segments inherit it rather than going unlabelled.
+        self._last_confident = {}
 
 
     def attach_source(self, name, source):
@@ -288,8 +298,7 @@ class AudioTranscriber:
             # Trigger the responder here, not when the phrase started. The
             # old code called create_response() with the first fragment of an
             # utterance, so the LLM was answering a truncated question.
-            if (who_spoke.lower() == "speaker"
-                    and not SystemConfig.get_record_only_mode()):
+            if who_spoke.lower() == "speaker" and AudioConfig.replies_enabled():
                 self.transcript_changed_event.set()
 
     def preload_speaker_model(self) -> bool:
@@ -303,16 +312,57 @@ class AudioTranscriber:
             AudioConfig.set_diarization(False)
             return False
 
+    # How long a speaker identification stays worth inheriting. Long enough to
+    # cover a run of short utterances -- someone reading out a number, a string
+    # of backchannel -- and short enough that a silence is not treated as the
+    # same person simply continuing. Guessed rather than measured: unlike the
+    # duration gate there is no experiment that settles it, only a judgement
+    # about how long a conversational turn lasts.
+    SPEAKER_MEMORY_S = 30.0
+
+    def _recent_speaker(self, who_spoke):
+        """
+        The last speaker confidently identified on this track, if recent.
+
+        Used when a segment is too short to identify on its own. Returning the
+        previous speaker can be wrong -- two people alternating in one-second
+        replies will all be attributed to whoever was measured last -- but the
+        alternative is an unlabelled line, and this codebase already takes the
+        view that merging two speakers is a better transcript than inventing
+        one: a reader can see a wrong turn boundary and cannot recover a
+        speaker who never existed.
+
+        Bounded by time because inheriting across a long silence is no longer a
+        guess about a conversation, it is a guess about a different one.
+        """
+        remembered = self._last_confident.get(who_spoke)
+        if not remembered:
+            return None
+        label, when = remembered
+        if time.monotonic() - when > self.SPEAKER_MEMORY_S:
+            return None
+        return label
+
     def _identify_speaker(self, who_spoke, segment):
         """
         Which of the voices on this track just spoke, or None.
 
-        Only the far-end track is worth splitting: "You" is a single person
-        by construction, and running this on it would spend an embedding per
+        Only the far-end track is worth splitting: "You" is a single person by
+        construction, and running this on it would spend an embedding per
         segment to rediscover that.
+
+        The Speakers setting decides whether a *label* is returned. It does not
+        decide whether the voice print is taken: that happens either way, and
+        is written to the session.
+
+        The two used to be the same switch, and that was a trap. Turning
+        Speakers off read as "do not show me labels" and silently also meant
+        "record nothing that could ever produce them" -- so a meeting held with
+        it off can never have its speakers recovered afterwards, no matter what
+        is known later. Over-splitting is not solved, and re-clustering at
+        export is the only remedy there is; making it unavailable should not be
+        a side effect of a checkbox about display.
         """
-        if not AudioConfig.get_diarization():
-            return None
         if who_spoke.lower() != "speaker":
             return None
 
@@ -327,8 +377,13 @@ class AudioTranscriber:
         config = registry.config
         if segment.duration_s < config.min_duration_s:
             # Too short for a reliable embedding, the same way it is too short
-            # for reliable language detection.
-            return None
+            # for reliable language detection. Carry the previous speaker
+            # forward rather than giving up: in a conversation the likeliest
+            # person to be speaking is the one who just was, and the
+            # alternative -- no label at all -- loses information the reader
+            # could have used. Same reasoning as the language stickiness
+            # above, for the same reason.
+            return self._recent_speaker(who_spoke) if _labels_wanted() else None
 
         if not self._embedder.ready:
             # Never block the transcription thread on a model load. The
@@ -341,10 +396,23 @@ class AudioTranscriber:
         if embedding is None:
             return None
 
+        # Kept whatever the Speakers setting says, so the export can re-cluster
+        # this meeting later.
+        self._last_embedding = embedding
+
         result = self._registries[who_spoke].assign(embedding)
         if result.speaker is None:
+            return self._recent_speaker(who_spoke) if _labels_wanted() else None
+
+        if result.confident:
+            self._last_confident[who_spoke] = (result.label, time.monotonic())
+
+        if not _labels_wanted():
+            # Clustered and recorded; simply not shown. Keeping the registry
+            # up to date means switching Speakers on mid-meeting starts
+            # labelling immediately rather than from an empty slate.
             return None
-        self._last_embedding = embedding
+
         # A blended segment -- two voices with no pause between them -- is
         # marked rather than presented as certain.
         return result.label if result.confident else f"{result.label}?"
@@ -591,4 +659,7 @@ class AudioTranscriber:
             self.segmenters[source_name].reset()
             self.trackers[source_name].reset()
             self._registries[source_name].reset()
+            # Or a cleared transcript inherits a speaker from the meeting
+            # that was just discarded.
+            self._last_confident.pop(source_name, None)
             self._session_language[source_name] = None

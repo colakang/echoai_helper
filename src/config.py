@@ -51,6 +51,18 @@ class PathConfig:
         return os.path.join(PathConfig.get_resource_path(), 'prompt')
 
     @staticmethod
+    def get_user_prompt_path():
+        """
+        Where a user's own imported templates live.
+
+        Outside the package, for the same reason conf.yaml has a copy there:
+        installed from a wheel the shipped templates sit in site-packages,
+        which is not somewhere anyone should be writing and which a reinstall
+        overwrites. Imports go here and survive.
+        """
+        return os.path.join(PathConfig.get_user_config_path(), "prompt")
+
+    @staticmethod
     def get_conf_file():
         """
         conf.yaml, preferring the user's own copy.
@@ -212,6 +224,116 @@ class SystemConfig:
         """
         cls._record_only_mode = bool(value)
         
+class LLMConfig:
+    """
+    Which language model to ask, chosen in the app rather than in a file.
+
+    conf.yaml still holds the default and the list of choices -- model names
+    change faster than releases do, and a name baked into the source goes stale
+    the week after it ships, so the list is data. What this adds is the ability
+    to change the answer without editing a file that, installed from a wheel,
+    lives in site-packages.
+
+    The override is process-wide and applies to both consumers: the live reply
+    suggestions and the cleanup pass at export. Having those silently disagree
+    about which model is in use would be worse than having no menu at all.
+    """
+
+    _model = None          # None means "not chosen in this process yet"
+    _loaded = False        # whether the saved choice has been read from disk
+
+    @classmethod
+    def _llm_section(cls):
+        import yaml
+        try:
+            with open(PathConfig.get_conf_file(), "rb") as f:
+                return (yaml.safe_load(f) or {}).get("LLM", {}) or {}
+        except Exception as e:
+            print(f"[WARN] Could not read the LLM configuration: {e}")
+            return {}
+
+    @classmethod
+    def configured_model(cls) -> Optional[str]:
+        """The default from conf.yaml, for whichever provider is configured."""
+        section = cls._llm_section()
+        provider = (section.get("provider") or "openai").lower()
+        return (section.get(provider) or {}).get("model")
+
+    @classmethod
+    def _load_saved(cls) -> None:
+        """
+        Read the user's saved choice, once, on first use.
+
+        Pulled in here rather than applied by whoever starts up first, because
+        that ordering is not something to rely on: the responder builds its
+        provider the moment it is constructed, and the UI -- which is where the
+        saved value used to be read -- is built after it. The choice was
+        therefore persisted correctly and then ignored on every restart, with
+        the menu showing one model and the provider using another.
+        """
+        cls._loaded = True
+        try:
+            from .SettingsManager import SettingsManager
+            saved = SettingsManager().get_setting("llm_model")
+        except Exception as e:
+            print(f"[WARN] Could not read the saved model: {e}")
+            return
+        if saved:
+            cls._model = saved
+
+    @classmethod
+    def get_model(cls) -> Optional[str]:
+        if not cls._loaded:
+            cls._load_saved()
+        return cls._model or cls.configured_model()
+
+    @classmethod
+    def set_model(cls, name: Optional[str]) -> None:
+        cls._loaded = True
+        cls._model = name or None
+
+    @classmethod
+    def provider_for(cls, model: Optional[str] = None) -> str:
+        """
+        Which backend a model name implies.
+
+        A bare name is OpenAI. A name carrying a vendor prefix -- anything with
+        a "/" in it, as LiteLLM already names its models -- goes through
+        LiteLLM, which is how every other backend is reached.
+
+        This is why there is one menu rather than a provider dropdown beside a
+        model dropdown. The two would only ever be set in valid combinations
+        anyway, so making the user keep them in sync is asking them to maintain
+        an invariant the app can see for itself. Adding Gemini or a local
+        Ollama becomes a line in conf.yaml rather than a UI change.
+        """
+        name = model if model is not None else cls.get_model()
+        if name and "/" in name:
+            return "litellm"
+        section = cls._llm_section()
+        configured = (section.get("provider") or "openai").lower()
+        # A prefix-free name means OpenAI unless the file asks for a CLI, which
+        # is a deliberate choice about billing rather than about the model.
+        return configured if configured == "cli" else "openai"
+
+    @classmethod
+    def available_models(cls) -> list:
+        """
+        What to offer in the menu.
+
+        The configured model is always included even when the list omits it,
+        so the menu can never fail to show what is actually in use. No name is
+        invented here: if conf.yaml lists nothing, the only option is whatever
+        is already configured.
+        """
+        listed = cls._llm_section().get("models") or []
+        models = [str(m) for m in listed if str(m).strip()]
+        current = cls.get_model()
+        if current and current not in models:
+            models.insert(0, current)
+        return models
+
+
 class AudioConfig:
     _instance = None
     _phrase_timeout = 5.2  # 默认值
@@ -259,6 +381,22 @@ class AudioConfig:
 
     # Which named profile is current. See src/profiles.py.
     _profile = "meeting"
+
+    @classmethod
+    def replies_enabled(cls):
+        """
+        Whether to ask a language model for a suggested reply.
+
+        The switch, and only the switch. This briefly also required interview
+        mode, on the reasoning that replies arrive too late to be useful once
+        the meeting profile lengthens the pause -- which quietly removed a
+        supported use: answering during a meeting, semi-automatically, rather
+        than only during an interview. The pause being longer makes the answer
+        later, not useless, and that is the user's call to make.
+
+        Off by default, so nothing is spent by anyone who has not asked for it.
+        """
+        return not SystemConfig.get_record_only_mode()
 
     @classmethod
     def get_profile(cls):

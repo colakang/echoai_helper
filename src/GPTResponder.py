@@ -4,9 +4,10 @@ import threading
 import re
 import time
 import traceback
+from datetime import datetime
 
 from .prompts import build_messages
-from .config import SystemConfig, EnvConfig, PathConfig
+from .config import SystemConfig, EnvConfig, PathConfig, LLMConfig
 from .llm import create_llm_provider
 import yaml
 from pathlib import Path
@@ -40,9 +41,89 @@ def _is_no_response(text: str) -> bool:
     return text.strip().strip(".").casefold() in ("none", "")
 
 
+# How the transcript pane renders one line: "Speaker: [S1: hello]" or
+# "You: [hello]". The track name and brackets are the widget's; the S1 is the
+# diarization label.
+_DISPLAY_LINE = re.compile(
+    r"^\s*(?P<track>Speaker|You)\s*[:：]\s*\[(?P<body>.*)\]\s*$")
+_SPEAKER_LABEL = re.compile(r"^\s*S(?P<n>\d+)(?P<doubt>\??)\s*[:：]\s*")
+
+# What the operator is called in the prompt. "You" is the track's name and
+# would be read as addressing the model.
+ME = "Me"
+
+
+def _utterance_only(text: str) -> str:
+    """
+    Rewrite transcript lines so the model can tell who said what.
+
+    Attribution used to be stripped entirely, which fixed one problem and
+    caused another. The problem it fixed: "S2: 零七七" read as a single
+    sentence, and the model welded the label into the digits and reported a
+    service number of S3099 that nobody had said. The problem it caused: in a
+    meeting the passage holds two or three people plus the operator, and with
+    the attribution gone the model cannot tell whose question it is answering,
+    or that one of those voices is the person it is writing for.
+
+    So the attribution stays and is made unmistakable instead. "S2" looks like
+    a code that could belong to a reference number; "Speaker 2" does not, and
+    "Me" marks the operator's own turns as distinct from everyone else's.
+
+        Speaker: [S1: 你好]     ->  Speaker 1: 你好
+        Speaker: [S2?: 零七七]  ->  Speaker 2 (unsure): 零七七
+        You: [稍等]             ->  Me: 稍等
+
+    Per line, because a picked passage is several of them and an anchored
+    pattern without MULTILINE cleans only the first -- which looked correct for
+    as long as every question was one utterance.
+    """
+    return "\n".join(f"{who}: {said}" for who, said in _attributed(text))
+
+
+def _spoken_words(text: str) -> str:
+    """
+    Just what was said, with every attribution removed.
+
+    Used for the length filter, which exists to stop the automatic path
+    answering "嗯" -- and which the attribution would defeat, because
+    "Speaker: 嗯" is comfortably long enough to pass a test aimed at "嗯".
+    """
+    return " ".join(said for _, said in _attributed(text))
+
+
+def _attributed(text: str):
+    """Yield (who, what) for each non-empty transcript line."""
+    for line in (text or "").splitlines():
+        display = _DISPLAY_LINE.match(line)
+        if display:
+            track, body = display.group("track"), display.group("body")
+        else:
+            track, body = "Speaker", line
+
+        label = _SPEAKER_LABEL.match(body)
+        if label:
+            body = body[label.end():]
+            who = f"Speaker {label.group('n')}"
+            if label.group("doubt"):
+                who += " (unsure)"
+        else:
+            who = ME if track == "You" else "Speaker"
+
+        body = body.strip()
+        if body:
+            yield who, body
+
+
 class GPTResponder:
-    def __init__(self, response_manager):
+    # Class-level default, so an instance built without going through __init__
+    # -- as tests do when they only need the answering logic -- still has one.
+    session_provider = None
+
+    def __init__(self, response_manager, session_provider=None):
         self.response_manager = response_manager
+        # Looked up when an answer completes rather than held, because the
+        # session is replaced when the transcript is cleared.
+        self.session_provider = session_provider
         self.response = ""
         self._response_update_interval = 2
         self._lock = threading.Lock()
@@ -52,6 +133,17 @@ class GPTResponder:
         # 初始化LLM provider
         if not self._initialize_llm_provider():
             raise ValueError("Failed to initialize LLM provider. Please check your configuration.")
+
+    def reload_provider(self) -> bool:
+        """
+        Rebuild the provider, picking up a model chosen since startup.
+
+        The provider is otherwise built once, at construction, so changing the
+        model in the menu would have applied to the cleanup pass at export and
+        silently not to the live replies -- two halves of the app quietly using
+        different models.
+        """
+        return self._initialize_llm_provider()
 
     def _initialize_llm_provider(self) -> bool:
         """
@@ -68,7 +160,11 @@ class GPTResponder:
 
             # Get LLM configuration
             llm_config = config.get('LLM', {})
-            provider_type = llm_config.get('provider', 'openai').lower()
+            # The chosen model decides the backend: a name carrying a vendor
+            # prefix goes through LiteLLM, a bare one to OpenAI. Picking
+            # "gemini/..." from the menu therefore just works, with no second
+            # control to keep in sync with the first.
+            provider_type = LLMConfig.provider_for()
 
             # Get provider-specific config
             if provider_type == 'openai':
@@ -79,7 +175,7 @@ class GPTResponder:
 
                 provider_config = {
                     'api_key': EnvConfig.get_openai_key(),
-                    'model': llm_config.get('openai', {}).get('model', 'gpt-4o-mini')
+                    'model': LLMConfig.get_model()
                 }
             elif provider_type == 'cli':
                 cli_config = llm_config.get('cli', {})
@@ -93,7 +189,7 @@ class GPTResponder:
                 # LiteLLM configuration (supports Gemini, Ollama, Claude, etc.)
                 litellm_config = llm_config.get('litellm', {})
                 provider_config = {
-                    'model': litellm_config.get('model'),
+                    'model': LLMConfig.get_model() or litellm_config.get('model'),
                     'api_key': litellm_config.get('api_key'),
                     'api_base': litellm_config.get('api_base')
                 }
@@ -248,7 +344,58 @@ class GPTResponder:
                 traceback.print_exc()
                 time.sleep(0.1)
 
-    def _answer(self, question_text, current_response_id):
+    def answer_passage(self, passage, on_done=None):
+        """
+        Answer a passage the user picked out, now.
+
+        The automatic path answers every finished utterance from the far end,
+        which is what an interview wants: a prompt while the other person is
+        still talking. A meeting is not that. There, most of what is said needs
+        no answer from you, and the one part that does is known only to you --
+        so the trigger has to be yours, and the input is the passage you point
+        at rather than the last sentence to arrive.
+
+        Runs on its own thread: the model takes seconds and this is called from
+        a button.
+
+        The length filter does not apply. It exists to stop the automatic path
+        answering "嗯" and "好的", which is a guess about intent -- and there is
+        nothing to guess about when someone has selected the text and asked.
+        """
+        # Emptiness is asked of the words, not of the rewritten form. Running
+        # the rewrite here as well applied it twice -- the second pass no
+        # longer recognises "Speaker 1: hello" as an attributed line and
+        # attributes it again, producing "Speaker: Speaker 1: hello". The
+        # rewrite belongs in _answer, which is the one path both callers share.
+        passage = (passage or "").strip()
+        if not _spoken_words(passage).strip():
+            return False
+
+        def run():
+            with self._lock:
+                if self._processing:
+                    print("[Responder] Busy; ignoring the request.")
+                    return
+                self._processing = True
+            try:
+                response_id = self.response_manager.create_response(
+                    question_time=datetime.now(), question_text=passage)
+                self._answer(passage, response_id, require_length=False)
+                self._last_processed_id = response_id
+            except Exception as e:
+                print(f"[Responder] Could not answer the selection: {e}")
+                traceback.print_exc()
+            finally:
+                with self._lock:
+                    self._processing = False
+                if on_done is not None:
+                    on_done()
+
+        threading.Thread(target=run, daemon=True,
+                         name="AnswerPassage").start()
+        return True
+
+    def _answer(self, question_text, current_response_id, require_length=True):
         previous = self.response_manager.get_response(self._last_processed_id)
         previous_answer = ""
         previous_question = ""
@@ -259,8 +406,16 @@ class GPTResponder:
         # Only show "Thinking..." once the question has cleared the length
         # filter. Setting it unconditionally left it on screen forever
         # whenever the generator returned early on a too-short utterance.
-        if not _worth_answering(question_text):
-            print("Skipping: too short ({} chars)".format(len(question_text.strip())))
+        # Measured before attribution is added, not after: "Speaker: 嗯" is
+        # comfortably long enough to pass a filter that exists to reject "嗯",
+        # and running the check on the rewritten string defeats it entirely.
+        spoken = _spoken_words(question_text)
+
+        question_text = _utterance_only(question_text)
+        previous_question = _utterance_only(previous_question)
+
+        if require_length and not _worth_answering(spoken):
+            print("Skipping: too short ({} chars)".format(len(spoken.strip())))
             return
 
         self.response = "Thinking..."
@@ -280,10 +435,36 @@ class GPTResponder:
 
         if answered:
             print("Generated response: {}".format(self.response))
+            self._record(current_response_id, question_text, self.response)
         elif self.response == "Thinking...":
             # Nothing came back at all. Leave the previous answer up rather
             # than a spinner that will never resolve.
             self.response = previous_answer
+
+    def _record(self, response_id, question, answer):
+        """
+        Write a finished answer to the session file.
+
+        session.append_response has existed since sessions were added and had
+        never been called, so no answer has ever been written to one. Nothing
+        showed it: the export offered from the app reads the live transcript,
+        where the answers are held in memory. It is re-exporting a past
+        session -- `echoai-helper sessions --export N` -- that went to the
+        file, found no answers there, and produced a transcript with all of
+        them missing.
+
+        That was survivable while replies were a side feature of interviews.
+        It stops being survivable when answering during a meeting is the point
+        of the session.
+        """
+        session = self.session_provider() if self.session_provider else None
+        if session is None:
+            return
+        try:
+            session.append_response(response_id, question, answer)
+        except Exception as e:
+            # An answer that cannot be filed is still an answer on screen.
+            print(f"[Responder] Could not record the answer: {e}")
 
     def update_response_interval(self, interval):
         """No-op, kept for callers that still set it.

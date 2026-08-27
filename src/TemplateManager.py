@@ -14,15 +14,108 @@ from .config import SystemConfig, PathConfig
 class TemplateManager:
     """模板管理器类，处理系统角色相关的模板文件"""
     
+    # Extension per category. system_role is .py by history -- the files hold a
+    # triple-quoted assignment -- but they are read as text, never imported.
+    EXTENSIONS = {'system_role': '.py', 'case_detail': '.txt', 'knowledge': '.txt'}
+
     @classmethod
     def _get_template_paths(cls) -> Dict[str, Tuple[str, str]]:
-        """获取模板路径配置"""
+        """The shipped templates, inside the package."""
         prompt_path = PathConfig.get_prompt_path()
-        return {
-            'system_role': (os.path.join(prompt_path, 'system_role'), '.py'),
-            'case_detail': (os.path.join(prompt_path, 'case_detail'), '.txt'),
-            'knowledge': (os.path.join(prompt_path, 'knowledge'), '.txt')
-        }
+        return {category: (os.path.join(prompt_path, category), ext)
+                for category, ext in cls.EXTENSIONS.items()}
+
+    @classmethod
+    def _get_user_paths(cls) -> Dict[str, Tuple[str, str]]:
+        """The user's own imported templates, outside the package."""
+        prompt_path = PathConfig.get_user_prompt_path()
+        return {category: (os.path.join(prompt_path, category), ext)
+                for category, ext in cls.EXTENSIONS.items()}
+
+    @classmethod
+    def import_template(cls, category: str, source_path: str) -> Optional[str]:
+        """
+        Copy a file in as a template of `category`, and return its name.
+
+        Imports land in the user config directory rather than beside the
+        shipped ones. Installed from a wheel those sit in site-packages, where
+        writing is wrong and a reinstall would silently delete whatever the
+        user had added.
+
+        A name that already exists is not overwritten silently; a numeric
+        suffix is added instead. Losing a template someone spent an afternoon
+        writing because they picked a familiar filename is not a reasonable
+        cost for the convenience of skipping a prompt.
+        """
+        import shutil
+
+        if category not in cls.EXTENSIONS:
+            print(f"Invalid template category: {category}")
+            return None
+        if not os.path.isfile(source_path):
+            print(f"No such file: {source_path}")
+            return None
+
+        directory, ext = cls._get_user_paths()[category]
+        os.makedirs(directory, exist_ok=True)
+
+        stem = os.path.splitext(os.path.basename(source_path))[0]
+        name, suffix = stem, 1
+        while os.path.exists(os.path.join(directory, f"{name}{ext}")):
+            name = f"{stem}_{suffix}"
+            suffix += 1
+
+        destination = os.path.join(directory, f"{name}{ext}")
+        try:
+            shutil.copy(source_path, destination)
+        except OSError as e:
+            print(f"Could not import {source_path}: {e}")
+            return None
+        print(f"[INFO] Imported {category} template {name!r} -> {destination}")
+        return name
+
+    @classmethod
+    def delete_template(cls, category: str, name: str) -> Optional[str]:
+        """
+        Remove one of the user's own templates. Returns why not, or None.
+
+        Only theirs. The shipped ones live inside the package -- deleting from
+        site-packages is somebody else's business, a reinstall would bring it
+        back, and a user who removed the last shipped role would be left with
+        an app that cannot assemble a prompt at all.
+        """
+        if category not in cls.EXTENSIONS:
+            return f"Unknown category: {category}"
+
+        directory, ext = cls._get_user_paths()[category]
+        path = os.path.join(directory, f"{name}{ext}")
+        if not os.path.exists(path):
+            shipped, _ = cls._get_template_paths()[category]
+            if os.path.exists(os.path.join(shipped, f"{name}{ext}")):
+                return (f"{name!r} came with the app and cannot be deleted. "
+                        f"Only templates you imported can.")
+            return f"No template called {name!r}."
+
+        try:
+            os.remove(path)
+        except OSError as e:
+            return f"Could not delete {name!r}: {e}"
+        print(f"[INFO] Deleted {category} template {name!r}")
+        return None
+
+    @classmethod
+    def resolve_template(cls, category: str, name: str) -> Optional[str]:
+        """
+        The file backing a template name, preferring the user's own.
+
+        A user who imports a template named like a shipped one means theirs.
+        """
+        for paths in (cls._get_user_paths(), cls._get_template_paths()):
+            directory, ext = paths[category]
+            candidate = os.path.join(directory, f"{name}{ext}")
+            if os.path.exists(candidate):
+                return candidate
+        return None
     
     @classmethod
     def initialize_default_role(cls) -> bool:
@@ -97,6 +190,33 @@ class TemplateManager:
             return ""
 
     @staticmethod
+    def _fill_placeholders(system_role: str, case_detail: str,
+                           knowledge: str) -> str:
+        """
+        Substitute the two placeholders this supports, and nothing else.
+
+        This used to call str.format(), which interprets *every* brace in the
+        template. That was survivable while the only templates were the two
+        shipped ones; it stopped being survivable the moment templates could be
+        imported, because a prompt is exactly the kind of text that contains
+        braces on purpose:
+
+            {"role": "user"}   -- a JSON example    -> KeyError
+            {customer_name}    -- a literal marker  -> KeyError
+            use { for grouping -- an unmatched one  -> ValueError
+
+        Every one of those left the role unchanged and the dropdown showing the
+        new selection, so the app went on using the previous persona while
+        appearing to have switched.
+
+        Replacing the two names directly cannot fail, and leaves everything
+        else in the prompt exactly as written.
+        """
+        return (system_role
+                .replace("{case_detail}", case_detail)
+                .replace("{knowledge}", knowledge))
+
+    @staticmethod
     def _unwrap_python_string(content: str) -> str:
         """If the whole file is one `NAME = <triple-quoted string>` assignment,
         return just the string body. Anything else is returned untouched."""
@@ -109,42 +229,45 @@ class TemplateManager:
 
     @classmethod
     def get_template_files(cls, category: str) -> List[str]:
-        """获取指定类别的所有模板文件"""
-        template_paths = cls._get_template_paths()
-        if category not in template_paths:
+        """
+        Every template of this category: the shipped ones and the user's own.
+
+        Names are unique across both, so a user template shadowing a shipped
+        one appears once -- and resolve_template() picks theirs.
+        """
+        if category not in cls.EXTENSIONS:
             print(f"Invalid template category: {category}")
             return []
-            
-        path, ext = template_paths[category]
-        pattern = os.path.join(path, f"*{ext}")
-        
-        try:
-            # 确保目录存在
-            os.makedirs(os.path.dirname(pattern), exist_ok=True)
-            
-            files = glob.glob(pattern)
-            return [os.path.basename(f).replace(ext, '') for f in files]
-        except Exception as e:
-            print(f"Error getting template files for {category}: {e}")
-            traceback.print_exc()
-            return []
+
+        names = []
+        for paths in (cls._get_template_paths(), cls._get_user_paths()):
+            path, ext = paths[category]
+            try:
+                for found in sorted(glob.glob(os.path.join(path, f"*{ext}"))):
+                    name = os.path.basename(found)[:-len(ext)]
+                    if name not in names:
+                        names.append(name)
+            except OSError as e:
+                print(f"Error listing templates in {path}: {e}")
+        return names
 
     @classmethod
     def update_system_role(cls, system_role_file: str, case_detail_file: str, 
                           knowledge_file: str) -> Optional[str]:
         """更新系统角色配置"""
         try:
-            template_paths = cls._get_template_paths()
-            
-            # 构建完整路径
-            system_role_path = os.path.join(template_paths['system_role'][0], 
-                                          f"{system_role_file}{template_paths['system_role'][1]}")
-            case_detail_path = os.path.join(template_paths['case_detail'][0], 
-                                          f"{case_detail_file}{template_paths['case_detail'][1]}")
-            knowledge_path = os.path.join(template_paths['knowledge'][0], 
-                                        f"{knowledge_file}{template_paths['knowledge'][1]}")
-            
-            # 加载模板内容
+            system_role_path = cls.resolve_template('system_role', system_role_file)
+            case_detail_path = cls.resolve_template('case_detail', case_detail_file)
+            knowledge_path = cls.resolve_template('knowledge', knowledge_file)
+
+            missing = [name for name, path in
+                       (('system_role', system_role_path),
+                        ('case_detail', case_detail_path),
+                        ('knowledge', knowledge_path)) if path is None]
+            if missing:
+                print(f"Error: template not found for {', '.join(missing)}")
+                return None
+
             system_role = cls.load_template(system_role_path)
             case_detail = cls.load_template(case_detail_path)
             knowledge = cls.load_template(knowledge_path)
@@ -153,17 +276,12 @@ class TemplateManager:
                 print("Error: One or more templates could not be loaded")
                 return None
             
-            try:
-                new_role = system_role.format(case_detail=case_detail, knowledge=knowledge)
-                if new_role.strip():  # 确保不是空字符串
-                    SystemConfig.set_system_role(new_role)
-                    return new_role
-                print("Error: Formatted role is empty")
+            new_role = cls._fill_placeholders(system_role, case_detail, knowledge)
+            if not new_role.strip():
+                print("Error: the assembled role is empty")
                 return None
-            except KeyError as e:
-                print(f"Template format error: Missing key {e}")
-                traceback.print_exc()
-                return None
+            SystemConfig.set_system_role(new_role)
+            return new_role
                 
         except Exception as e:
             print(f"Error updating system role: {e}")
@@ -172,8 +290,8 @@ class TemplateManager:
 
     @classmethod
     def ensure_template_directories(cls) -> None:
-        """确保所有模板目录都存在"""
-        for path, _ in cls._get_template_paths().values():
+        """Only the user's own directories; the shipped ones come with the package."""
+        for path, _ in cls._get_user_paths().values():
             try:
                 os.makedirs(path, exist_ok=True)
             except Exception as e:

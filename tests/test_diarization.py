@@ -280,3 +280,99 @@ def test_merge_relabels_text_and_speaker_together():
     assert messages[0]["speaker"] == messages[1]["speaker"] == "S1"
     assert messages[0]["text"] == "S1: first"
     assert messages[1]["text"] == "S1: second"
+
+
+# --------------------------------------------------------------------------
+# How long a segment has to be before it can identify anyone
+# --------------------------------------------------------------------------
+#
+# The gate was 1.0s and had never been measured. Cutting two single-speaker
+# recordings into windows and comparing each against that speaker's own
+# full-length print:
+#
+#     window   mean    p10
+#      0.5s    0.342   0.064
+#      1.0s    0.480   0.336     <- the old gate
+#      1.5s    0.624   0.486
+#      2.0s    0.721   0.636     <- first duration whose p10 clears 0.62
+#      3.0s    0.713   0.635
+#
+# At one second a speaker matched themselves at 0.480, against a same-speaker
+# threshold of 0.62 and a cross-speaker range of 0.21-0.50 -- a person did not
+# resemble themselves more than they resembled someone else. That is how one
+# caller reading out a number became three speakers.
+
+def test_the_duration_gate_matches_what_was_measured():
+    assert DiarizationConfig().min_duration_s == 2.0
+
+
+def test_the_gate_is_above_where_a_speaker_stops_matching_themselves():
+    """
+    The measurement in one line: a window admitted by the gate must produce
+    embeddings that clear the same-speaker threshold, or the gate is letting
+    noise decide who is talking.
+    """
+    config = DiarizationConfig()
+    measured_p10_at_the_gate = 0.636      # 2.0s
+    assert measured_p10_at_the_gate > config.same_speaker_threshold
+
+
+def test_it_agrees_with_the_language_threshold():
+    """
+    Both answer the same physical question -- how much audio is enough to tell
+    anything from -- and were measured independently. Their agreeing is not a
+    coincidence worth breaking casually.
+    """
+    from src.AudioTranscriber import LANGUAGE_TRUST_S
+    assert DiarizationConfig().min_duration_s == LANGUAGE_TRUST_S
+
+
+# --------------------------------------------------------------------------
+# The Speakers setting shows labels; it does not decide what is recorded
+# --------------------------------------------------------------------------
+#
+# These used to be one switch, and that was a trap. Turning Speakers off read
+# as "do not show me labels" and silently also meant "record nothing that
+# could ever produce them" -- so a meeting held with it off could never have
+# its speakers recovered, no matter what was learned later. Over-splitting is
+# not solved, and re-clustering at export is the only remedy there is.
+
+def test_voice_prints_are_taken_even_with_labels_off():
+    import inspect
+    from src import AudioTranscriber as module
+    body = inspect.getsource(module.AudioTranscriber._identify_speaker)
+
+    stores = body.index("self._last_embedding = embedding")
+    gate = body.index("if not _labels_wanted():")
+    assert stores < gate, "the print must be kept before labels are considered"
+
+
+def test_the_setting_no_longer_short_circuits_the_whole_function():
+    """The first thing it did was return None, which is what lost the prints."""
+    import inspect
+    from src import AudioTranscriber as module
+    body = inspect.getsource(module.AudioTranscriber._identify_speaker)
+    head = body.split("if who_spoke.lower()", 1)[0]
+    assert "get_diarization()" not in head
+
+
+def test_the_embedder_loads_regardless_of_the_setting():
+    """
+    Without this the separation is decorative: nothing is embedded because the
+    model was never loaded, and the session ends up with no prints anyway.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    call = body.index("preload_speaker_model")
+    preceding = body[:call].rsplit("\n", 6)[-1]
+    assert "get_diarization" not in preceding
+
+
+def test_toggling_it_does_not_reload_anything():
+    """It is a display setting now; the model is already up."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    handler = body.split("def toggle_diarization", 1)[1][:700]
+    assert "preload_speaker_model" not in handler

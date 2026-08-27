@@ -21,7 +21,7 @@ from src.ResponseManager import ResponseManager
 from src.SettingsManager import SettingsManager
 from src.TemplateManager import TemplateManager
 import src.TranscriberModels as TranscriberModels
-from src.config import EnvConfig, SystemConfig, AudioConfig, PathConfig
+from src.config import EnvConfig, SystemConfig, AudioConfig, PathConfig, LLMConfig
 from src import profiles
 from src.TranscriptUI import TranscriptUI
 #import torch
@@ -278,14 +278,20 @@ def _build_polish_provider(backend):
     if backend == "cli":
         return create_llm_provider("cli", dict(llm_config.get("cli", {})))
 
-    provider_type = llm_config.get("provider", "openai").lower()
+    provider_type = LLMConfig.provider_for()
     if provider_type == "cli":
+        # The polish backend was chosen explicitly above; falling back to a CLI
+        # here would ignore that choice.
         provider_type = "openai"
     if provider_type == "openai":
         config = {"api_key": EnvConfig.get_openai_key(),
-                  "model": llm_config.get("openai", {}).get("model", "gpt-4o-mini")}
+                  "model": LLMConfig.get_model()}
     else:
         config = dict(llm_config.get(provider_type, {}))
+        # The menu wins here too, so cleanup and live replies cannot end up
+        # using different models without anyone having asked for that.
+        if LLMConfig.get_model():
+            config["model"] = LLMConfig.get_model()
     return create_llm_provider(provider_type, config)
 
 
@@ -408,7 +414,8 @@ def clear_context(transcriber, mic_queue, speaker_queue, transcript_ui):
     transcript_ui.clear()
     print("Context cleared")
 
-def create_ui_components(root, response_manager, transcriber, mic_queue, speaker_queue):
+def create_ui_components(root, response_manager, transcriber, mic_queue,
+                         speaker_queue, responder=None):
     """Phase 2: 创建并配置所有UI组件（双队列版本）"""
     # 基础设置
     ctk.set_appearance_mode("dark")
@@ -467,8 +474,11 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         "Case Detail": (case_detail_files, "case_detail"),
         "Knowledge Base": (knowledge_files, "knowledge")
     }
+    template_imports = {}
+    template_deletes = {}
 
     template_vars = {}
+    template_menus = {}
     row = 0
     for label, (options, setting_key) in templates.items():
         label_widget = ctk.CTkLabel(
@@ -488,9 +498,74 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
             width=160,
             height=dropdown_height,  # 新增这行
         )
-        menu.grid(row=row, column=0, padx=(80, 5), pady=1, sticky="e")
+        # Leave room on the right for the import and delete buttons, which
+        # belong beside their own dropdown. They were briefly in column 1, on
+        # top of the action buttons -- small enough to still be clickable,
+        # which is how that survived being noticed.
+        menu.grid(row=row, column=0, padx=(80, 60), pady=1, sticky="e")
         template_vars[setting_key] = var
+        template_menus[setting_key] = menu
+
+        # Import, per category. The file dialog is the only way to add a
+        # template without knowing where the app keeps them -- which, once
+        # installed from a wheel, is a directory inside site-packages that
+        # nobody should be asked to find.
+        def make_importer(category=setting_key, target_menu=menu, target_var=var):
+            def do_import():
+                path = filedialog.askopenfilename(
+                    title=f"Import {category.replace('_', ' ')}",
+                    filetypes=[("Text and Python", "*.txt *.py *.md"),
+                               ("All files", "*.*")])
+                if not path:
+                    return
+                name = TemplateManager.import_template(category, path)
+                if not name:
+                    messagebox.showerror(
+                        "Import failed",
+                        f"Could not import {os.path.basename(path)}.")
+                    return
+                names = TemplateManager.get_template_files(category)
+                target_menu.configure(values=names)
+                target_var.set(name)          # selecting it applies it
+            return do_import
+
+        import_button = ctk.CTkButton(
+            main_control_frame, text="+", width=26, height=dropdown_height,
+            command=make_importer(),
+            fg_color="#2B4C7E")
+        import_button.grid(row=row, column=0, padx=(0, 31), pady=1, sticky="e")
+        template_imports[setting_key] = import_button
+
+        def make_remover(category=setting_key, target_menu=menu, target_var=var):
+            def do_delete():
+                name = target_var.get()
+                if not messagebox.askyesno(
+                        "Delete template",
+                        f"Delete the {category.replace('_', ' ')} template "
+                        f"{name!r}?\n\nThis cannot be undone."):
+                    return
+                problem = TemplateManager.delete_template(category, name)
+                if problem:
+                    messagebox.showwarning("Not deleted", problem)
+                    return
+                names = TemplateManager.get_template_files(category)
+                target_menu.configure(values=names or ["none"])
+                # Move off the deleted one, which applies the replacement.
+                target_var.set(names[0] if names else "none")
+            return do_delete
+
+        delete_button = ctk.CTkButton(
+            main_control_frame, text="\u2212", width=26, height=dropdown_height,
+            command=make_remover(), fg_color="#6B2737")
+        delete_button.grid(row=row, column=0, padx=(0, 5), pady=1, sticky="e")
+        template_deletes[setting_key] = delete_button
         row += 1
+
+    template_hint = ctk.CTkLabel(
+        main_control_frame,
+        text="used for the reply suggestions",
+        font=("Arial", 9), text_color="#8a8a8a")
+    template_hint.grid(row=row, column=0, padx=5, pady=(0, 2), sticky="w")
 
     def on_selection_change(*args):
         """处理模板选择变化"""
@@ -504,7 +579,16 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
                 template_vars["knowledge"].get()
             )
             if new_role is None:
+                # Say so on screen, not only in a log nobody has open. A failed
+                # switch leaves the *previous* persona in force while the
+                # dropdown shows the new one -- the app looks changed and is
+                # not, which is the worst of both.
                 print("Warning: Failed to update system role")
+                messagebox.showwarning(
+                    "Template not applied",
+                    "That combination could not be loaded, so the previous "
+                    "one is still in use.\n\nSee the log for what went wrong:\n"
+                    "~/Library/Logs/EchoAI Helper.log")
         except Exception as e:
             print(f"Error updating system role: {e}")
 
@@ -589,8 +673,42 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
             traceback.print_exc()
 
     # === Column 2: Action Buttons ===
+    def answer_selection():
+        """
+        Answer the passage highlighted in the transcript.
+
+        The automatic path answers every finished utterance from the far end,
+        which suits an interview. A meeting is the other shape: most of what is
+        said needs no answer from you, and only you know which part does -- so
+        the trigger is yours, and the input is what you point at rather than
+        whatever arrived last.
+
+        Whole passage, not a single line: a question in a meeting is usually
+        spread over several turns, and answering the last sentence of it in
+        isolation answers the wrong question.
+        """
+        passage = transcript_ui.selected_passage()
+        if not passage.strip():
+            messagebox.showinfo(
+                "Nothing selected",
+                "Pick what you want answered, then press Answer.\n\n"
+                "• Drag across the turns, for a run of them.\n"
+                "• \u2318-click (or Ctrl-click) individual turns, when the "
+                "question is spread out and somebody else spoke in between.")
+            return
+        lines = len([l for l in passage.splitlines() if l.strip()])
+        print(f"[INFO] Answering a selection of {lines} line(s), "
+              f"{len(passage)} characters")
+        # Cleared once it has been sent, so the next question starts from
+        # nothing rather than silently inheriting the last one's turns.
+        if responder.answer_passage(passage, on_done=transcript_ui.clear_picks):
+            return
+        messagebox.showwarning("Nothing to answer",
+                               "That selection had no text in it.")
+
     buttons_data = [
         ("Clear Transcript", lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui), "#1f538d"),
+        ("Answer Selection", answer_selection, "#7a4a1f"),
         ("Export Conversation", export_responses, "#1B4332"),
         ("Pop Up", None, "#1B4332")
     ]
@@ -619,6 +737,15 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
             export_button = btn
         elif text == "Pop Up":
             freeze_button = btn
+
+    # Says how the button above is driven. Selecting text in a pane that has
+    # spent its life looking like a list of clickable rows is not a guessable
+    # interaction, and it is the only way to reach the on-demand answer.
+    ctk.CTkLabel(
+        main_control_frame,
+        text="drag, or \u2318-click turns, then Answer",
+        font=("Arial", 9), text_color="#8a8a8a"
+    ).grid(row=len(buttons_data), column=1, padx=5, pady=(0, 2))
 
     # 创建TranscriptUI实例
     transcript_ui = TranscriptUI(transcript_textbox, response_manager)
@@ -651,6 +778,20 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
         justify="left",
     )
     profile_hint.grid(row=1, column=2, columnspan=1, padx=5, pady=(0, 2), sticky="w")
+
+    # The prompt templates are deliberately always available.
+    #
+    # They were briefly greyed out when replies were off, which is logically
+    # right -- nothing reads them then -- and awful in practice: replies ship
+    # off by default, so the controls for configuring replies were disabled
+    # out of the box, with nothing on screen to say why. Hiding the settings
+    # for a feature behind that feature being on is a trap.
+    #
+    # They were also briefly greyed out outside interview mode, before it was
+    # settled that answering during a meeting is a supported use and needs a
+    # persona, a case and a knowledge base just as much.
+    #
+    # A hint says what they affect. Nothing needs disabling.
 
     def on_profile_change(label):
         profile = profiles.by_label(label)
@@ -710,6 +851,44 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     )
     pause_unit.grid(row=2, column=2, padx=(135, 5), pady=2, sticky="w")
 
+    # Which model to ask. The choices come from conf.yaml rather than from the
+    # source, because model names change faster than releases do -- a name
+    # baked into the code goes stale the week after it ships.
+    #
+    # One menu, not two, although there are two consumers: the live reply
+    # suggestions and the cleanup pass at export. Letting those disagree about
+    # which model is in use would be worse than having no menu at all.
+    model_label = ctk.CTkLabel(main_control_frame, text="Model:",
+                               font=("Arial", 12), text_color="#FFFCF2")
+    model_label.grid(row=3, column=2, padx=5, pady=2, sticky="w")
+
+    # No need to apply the saved value here: LLMConfig loads it on first use,
+    # which is what makes it survive a restart. Reading it here was the bug --
+    # the responder builds its provider before this runs.
+    model_values = LLMConfig.available_models() or ["(none configured)"]
+    model_var = ctk.StringVar(value=LLMConfig.get_model() or model_values[0])
+
+    def on_model_change(value):
+        LLMConfig.set_model(value)
+        settings_manager.update_setting("llm_model", value)
+        # Rebuild the live provider, which is otherwise constructed once at
+        # startup and would keep answering on the previous model.
+        rebuilt = False
+        if responder is not None:
+            try:
+                rebuilt = responder.reload_provider()
+            except Exception as e:
+                print(f"[WARN] Could not switch the model: {e}")
+        print(f"[INFO] Model: {value}"
+              + ("" if rebuilt else " (replies will use it on next start)"))
+        model_label.configure(text_color="#639cdc")
+        root.after(500, lambda: model_label.configure(text_color="#FFFCF2"))
+
+    model_dropdown = ctk.CTkOptionMenu(
+        main_control_frame, variable=model_var, values=model_values,
+        width=150, height=dropdown_height, command=on_model_change)
+    model_dropdown.grid(row=3, column=2, padx=(60, 5), pady=2, sticky="w")
+
     # === Column 4: Window Controls ===
     # Create a frame for the first row controls
     controls_frame = ctk.CTkFrame(main_control_frame, fg_color="transparent")
@@ -719,13 +898,18 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     record_only_var = tk.BooleanVar(value=settings_manager.get_setting("record_only_mode"))
 
     def toggle_record_only():
+        # Suppresses the reply suggestions without leaving interview mode --
+        # live partials and the shorter pause stay, the model calls stop. The
+        # name predates the mode selector, when it meant "just record, do not
+        # do the GPT thing"; the mode now covers most of that, and what is left
+        # is "interview timing, no API cost".
         is_record_only = record_only_var.get()
         SystemConfig.set_record_only_mode(is_record_only)
         settings_manager.update_setting("record_only_mode", is_record_only)
 
     record_only_checkbox = ctk.CTkCheckBox(
         controls_frame,
-        text="Record Only",
+        text="No replies",
         variable=record_only_var,
         command=toggle_record_only,
         width=100,
@@ -740,14 +924,14 @@ def create_ui_components(root, response_manager, transcriber, mic_queue, speaker
     diarize_var = tk.BooleanVar(value=settings_manager.get_setting("diarization"))
 
     def toggle_diarization():
+        # Shows or hides the labels. The voice prints behind them are taken
+        # regardless, so switching this on mid-meeting starts labelling from
+        # what has already been clustered rather than from an empty slate --
+        # and switching it off does not throw away the ability to sort the
+        # speakers out at export.
         enabled = diarize_var.get()
         AudioConfig.set_diarization(enabled)
         settings_manager.update_setting("diarization", enabled)
-        if enabled:
-            # Warm it here rather than inside the next utterance, where the
-            # load would stall transcription for 20s or more.
-            threading.Thread(target=transcriber.preload_speaker_model,
-                             daemon=True).start()
 
     diarize_checkbox = ctk.CTkCheckBox(
         controls_frame,
@@ -943,7 +1127,12 @@ def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
     if not hasattr(backend, "restart_capture"):
         return          # Windows: WASAPI holds its own device handle
 
-    state = {"recorders": dict(recorders), "backoff": 0.0}
+    # Each rebuild costs the far-end recording a ~378ms gap, because restarting
+    # PortAudio invalidates every stream. A retry that keeps failing must
+    # therefore stop being cheap to repeat: backing off at a fixed 30s once cut
+    # a hole in the recording twice a minute, for an hour, achieving nothing.
+    state = {"recorders": dict(recorders), "backoff": 0.0, "failures": 0}
+    RETRY_MIN, RETRY_MAX = 30, 600
 
     def watch():
         while not _shutting_down.is_set():
@@ -985,12 +1174,16 @@ def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
                 rebuilt = state["recorders"].get("You")
                 if rebuilt is None:
                     # CoreAudio said there was a microphone and PortAudio could
-                    # not open it. Back off so a device stuck half-present does
-                    # not rebuild the audio stack on every pass.
-                    state["backoff"] = time.monotonic() + 30
-                    print("[WARN] You: could not open a microphone — "
-                          "retrying in 30s")
+                    # not open it. Back off further each time: something that
+                    # has failed repeatedly is unlikely to succeed on the next
+                    # pass, and every attempt costs the far-end recording.
+                    state["failures"] += 1
+                    wait = min(RETRY_MIN * 2 ** (state["failures"] - 1), RETRY_MAX)
+                    state["backoff"] = time.monotonic() + wait
+                    print(f"[WARN] You: could not open a microphone — "
+                          f"retrying in {wait}s")
                 else:
+                    state["failures"] = 0
                     print(f"[INFO] You: capture restored on "
                           f"{rebuilt.source.device_name!r}")
                     if on_rebuilt is not None:
@@ -998,7 +1191,9 @@ def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
             except Exception as exc:
                 # Never fatal. A failed recovery is bad; taking the meeting
                 # down with it would be worse.
-                state["backoff"] = time.monotonic() + 30
+                state["failures"] += 1
+                state["backoff"] = time.monotonic() + min(
+                    RETRY_MIN * 2 ** (state["failures"] - 1), RETRY_MAX)
                 print(f"[WARN] could not rebuild capture: {exc}")
 
     # Three ways this process ends, and the thread has to stop for all of them:
@@ -1116,7 +1311,8 @@ def main():
         {"You": mic_queue, "Speaker": speaker_queue},
         on_rebuilt=_mic_rebuilt)
 
-    responder = GPTResponder(response_manager)
+    responder = GPTResponder(response_manager,
+                             session_provider=lambda: transcriber.session)
     respond = threading.Thread(target=responder.respond_to_transcriber, args=(transcriber,))
     respond.daemon = True
     respond.start()
@@ -1127,7 +1323,7 @@ def main():
 
     root = ctk.CTk()
     widgets = create_ui_components(root, response_manager, transcriber,
-                                   mic_queue, speaker_queue)
+                                   mic_queue, speaker_queue, responder)
     transcript_ui = widgets["transcript_ui"]
     response_textbox = widgets["response_textbox"]
     freeze_button = widgets["freeze_button"]
@@ -1147,12 +1343,16 @@ def main():
     SystemConfig.set_record_only_mode(settings_manager.get_setting("record_only_mode"))
     AudioConfig.set_diarization(settings_manager.get_setting("diarization"))
     AudioConfig.set_speaker_count(settings_manager.get_setting("speaker_count"))
-    if AudioConfig.get_diarization():
-        # Off the main thread: loading it costs ~20s the first time, and the
-        # UI should come up regardless. Segments transcribe unlabelled until
-        # it is ready rather than waiting for it.
-        threading.Thread(target=transcriber.preload_speaker_model,
-                         daemon=True).start()
+    # Loaded whether or not labels are being shown, because the voice prints
+    # are recorded either way -- they are the only thing that makes a meeting's
+    # speakers recoverable afterwards, and a meeting held without them cannot
+    # be repaired later no matter what is learned.
+    #
+    # Off the main thread: loading costs ~20s the first time, and the UI should
+    # come up regardless. Segments transcribe without prints until it is ready
+    # rather than waiting for it.
+    threading.Thread(target=transcriber.preload_speaker_model,
+                     daemon=True).start()
 
     # Apply the saved transcription profile before the first chunk arrives.
     saved_profile = profiles.by_key(settings_manager.get_setting("profile"))

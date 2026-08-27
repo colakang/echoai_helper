@@ -250,10 +250,14 @@ class MacOSAudioBackend(AudioBackend):
         sd._initialize()
 
         rebuilt = {}
-        for name, recorder in recorders.items():
-            if recorder is None:
-                rebuilt[name] = None
-                continue
+        for name in recorders:
+            # Note what is *not* here: a check that skips a track whose
+            # recorder is currently None. That is the state this exists to
+            # repair -- a microphone that died, or that was never there when
+            # the app started -- so treating it as nothing to do meant the
+            # track could never come back. It also meant retrying forever,
+            # tearing down the far-end stream on every attempt to achieve
+            # nothing, because the retry could not succeed by construction.
             wanted = (preferred_mic() if name == Recorder.PAUSABLE
                       else next((d for d in list_input_devices()
                                  if d["is_loopback"]), None))

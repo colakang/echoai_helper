@@ -218,3 +218,64 @@ def test_the_description_says_what_matters(directory):
     assert "2 lines" in text
     assert "2 speakers" in text
     assert "not exported" in text
+
+
+# --------------------------------------------------------------------------
+# Answers have to reach the session file
+# --------------------------------------------------------------------------
+#
+# SessionWriter.append_response existed from the beginning and was never
+# called, so no answer had ever been written to a session. Nothing showed it:
+# the export offered in the app reads the live transcript, where the answers
+# are held in memory. Only re-exporting a past session went to the file, found
+# no answers, and produced a transcript with every one of them missing.
+#
+# Survivable while replies were a side feature of interviews. Not survivable
+# once answering during a meeting is the point of the session.
+
+def test_the_responder_writes_answers_to_the_session():
+    import inspect
+    from src.GPTResponder import GPTResponder
+    body = inspect.getsource(GPTResponder._answer)
+    assert "self._record(" in body
+    assert "append_response" in inspect.getsource(GPTResponder._record)
+
+
+def test_it_is_wired_up_at_startup():
+    """The method existing is not the same as anything calling it."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    assert "session_provider=" in body
+
+
+def test_the_session_is_looked_up_when_needed_not_held():
+    """
+    Clearing the transcript starts a new session. A responder holding the old
+    writer would keep filing answers into a file nobody is reading.
+    """
+    import inspect
+    from src.GPTResponder import GPTResponder
+    body = inspect.getsource(GPTResponder._record)
+    assert "self.session_provider()" in body
+
+
+def test_an_unwritable_session_does_not_lose_the_answer(tmp_path):
+    """An answer that cannot be filed is still an answer on screen."""
+    import inspect
+    from src.GPTResponder import GPTResponder
+    body = inspect.getsource(GPTResponder._record)
+    assert "except Exception" in body
+
+
+def test_a_recorded_answer_comes_back_on_re_export(tmp_path):
+    """End to end through the file, which is what was broken."""
+    writer = SessionWriter(tmp_path)
+    writer.append("Speaker", "what is the service number?",
+                  datetime.now(), response_id="r1")
+    writer.append_response("r1", "what is the service number?", "It is 077-099.")
+    writer.close()
+
+    conversation = to_conversation(writer.path)
+    message = conversation["conversation"]["messages"][0]
+    assert message["response"]["response_text"] == "It is 077-099."
