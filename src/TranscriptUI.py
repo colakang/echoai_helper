@@ -125,8 +125,11 @@ class TranscriptUI:
 
         Read from the tag rather than from remembered positions: Tk moves tags
         when text is inserted above them, so a pick survives the meeting
-        carrying on underneath it. Reversed because this list is newest first
-        and a passage reads better in the order it was said.
+        carrying on underneath it.
+
+        Returned in the order they appear on screen. Putting them back into
+        the order they were spoken happens in one place, for both ways of
+        choosing -- see _chronological.
         """
         ranges = self.text_widget.tag_ranges("picked")
         turns = []
@@ -134,7 +137,24 @@ class TranscriptUI:
             text = self.text_widget.get(ranges[i], ranges[i + 1]).strip()
             if text:
                 turns.append(text)
-        return "\n".join(reversed(turns))
+        return "\n".join(turns)
+
+    @staticmethod
+    def _chronological(passage: str) -> str:
+        """
+        Put a passage back into the order it was spoken.
+
+        This pane is newest first, so anything lifted out of it reads
+        backwards. That was handled for picked turns and not for a dragged
+        selection, so a dragged question arrived at the model in reverse --
+        which is not obviously wrong to look at, and quietly makes a
+        multi-turn question incoherent.
+
+        Done here rather than in each path, because getting it right in one of
+        two places is how it came to be wrong in the first place.
+        """
+        lines = [l for l in passage.splitlines() if l.strip()]
+        return "\n".join(reversed(lines))
 
     def clear_picks(self) -> None:
         try:
@@ -164,14 +184,14 @@ class TranscriptUI:
         """
         picked = self.picked_turns()
         if picked.strip():
-            return picked
+            return self._chronological(picked)
         try:
             live = self.text_widget.get("sel.first", "sel.last")
             if live.strip():
-                return live
+                return self._chronological(live)
         except Exception:
             pass
-        return self._last_selection
+        return self._chronological(self._last_selection)
 
     def forget_selection(self) -> None:
         self._last_selection = ""

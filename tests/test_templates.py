@@ -716,11 +716,29 @@ def test_picked_turns_survive_the_meeting_carrying_on():
     assert 'tag_ranges("picked")' in body
 
 
-def test_picked_turns_are_sent_oldest_first():
-    """The list is newest first; a passage reads in the order it was said."""
+def test_a_passage_is_sent_in_the_order_it_was_spoken():
+    """
+    The pane is newest first, so anything lifted out of it reads backwards.
+    A reversed multi-turn question is not obviously wrong to look at and
+    quietly makes the question incoherent.
+    """
+    from src.TranscriptUI import TranscriptUI
+    passage = "third\nsecond\nfirst"
+    assert TranscriptUI._chronological(passage) == "first\nsecond\nthird"
+
+
+def test_both_ways_of_choosing_are_reordered():
+    """
+    This was handled for picked turns and not for a dragged selection, so a
+    dragged question arrived at the model in reverse. Getting it right in one
+    of two places is how it came to be wrong; it happens in one place now.
+    """
     import inspect
     from src.TranscriptUI import TranscriptUI
-    assert "reversed(turns)" in inspect.getsource(TranscriptUI.picked_turns)
+    body = inspect.getsource(TranscriptUI.selected_passage)
+    assert body.count("_chronological(") == 3, \
+        "picked turns, the live drag, and the remembered drag"
+    assert "reversed" not in inspect.getsource(TranscriptUI.picked_turns)
 
 
 def test_picks_win_over_a_drag():
