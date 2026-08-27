@@ -88,6 +88,60 @@ class TranscriptUI:
         self.text_widget.bind("<ButtonRelease-1>", self._remember_selection,
                               add="+")
 
+        # Picking individual turns, for the case dragging cannot express: the
+        # question you want answered is spread over several of your
+        # counterpart's turns with somebody else's in between, and a drag has
+        # to take that somebody else along.
+        #
+        # Deliberately manual rather than "select every turn labelled S1". The
+        # labels are not reliable enough to filter on -- the same speaker
+        # reading out a number and talking scores as two different people --
+        # so filtering by them would quietly drop half of what was wanted.
+        self.text_widget.tag_configure("picked", background="#2B4C7E")
+        for sequence in ("<Command-Button-1>", "<Control-Button-1>"):
+            self.text_widget.bind(sequence, self._toggle_turn, add="+")
+
+    def _toggle_turn(self, event):
+        """Add or remove the turn under the cursor from the picked set."""
+        try:
+            start = self.text_widget.index(f"@{event.x},{event.y} linestart")
+            end = self.text_widget.index(f"@{event.x},{event.y} lineend")
+        except Exception:
+            return "break"
+        if not self.text_widget.get(start, end).strip():
+            return "break"          # a blank separator line
+
+        already = [r for r in self.text_widget.tag_ranges("picked")]
+        for i in range(0, len(already), 2):
+            if str(already[i]) == str(start):
+                self.text_widget.tag_remove("picked", start, end)
+                return "break"
+        self.text_widget.tag_add("picked", start, end)
+        return "break"              # do not also run the show-response click
+
+    def picked_turns(self) -> str:
+        """
+        The turns picked one by one, oldest first.
+
+        Read from the tag rather than from remembered positions: Tk moves tags
+        when text is inserted above them, so a pick survives the meeting
+        carrying on underneath it. Reversed because this list is newest first
+        and a passage reads better in the order it was said.
+        """
+        ranges = self.text_widget.tag_ranges("picked")
+        turns = []
+        for i in range(0, len(ranges), 2):
+            text = self.text_widget.get(ranges[i], ranges[i + 1]).strip()
+            if text:
+                turns.append(text)
+        return "\n".join(reversed(turns))
+
+    def clear_picks(self) -> None:
+        try:
+            self.text_widget.tag_remove("picked", "1.0", "end")
+        except Exception:
+            pass
+
     def _remember_selection(self, _event=None) -> None:
         try:
             text = self.text_widget.get("sel.first", "sel.last")
@@ -100,10 +154,17 @@ class TranscriptUI:
         """
         What the user highlighted, live or last time.
 
+        Turns picked individually win over a drag: picking is the more
+        deliberate act, and the only one that can leave somebody else's turn
+        out of the middle.
+
         Falls back to the remembered selection rather than returning nothing:
         the alternative is a button that works or does not depending on where
         focus happens to be, which is indistinguishable from broken.
         """
+        picked = self.picked_turns()
+        if picked.strip():
+            return picked
         try:
             live = self.text_widget.get("sel.first", "sel.last")
             if live.strip():

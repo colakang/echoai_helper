@@ -666,16 +666,20 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         if not passage.strip():
             messagebox.showinfo(
                 "Nothing selected",
-                "Highlight the part of the transcript you want answered, "
-                "then press Answer.\n\nDrag across as many turns as the "
-                "question covers — the whole selection is sent.")
+                "Pick what you want answered, then press Answer.\n\n"
+                "• Drag across the turns, for a run of them.\n"
+                "• \u2318-click (or Ctrl-click) individual turns, when the "
+                "question is spread out and somebody else spoke in between.")
             return
         lines = len([l for l in passage.splitlines() if l.strip()])
         print(f"[INFO] Answering a selection of {lines} line(s), "
               f"{len(passage)} characters")
-        if not responder.answer_passage(passage):
-            messagebox.showwarning("Nothing to answer",
-                                   "That selection had no text in it.")
+        # Cleared once it has been sent, so the next question starts from
+        # nothing rather than silently inheriting the last one's turns.
+        if responder.answer_passage(passage, on_done=transcript_ui.clear_picks):
+            return
+        messagebox.showwarning("Nothing to answer",
+                               "That selection had no text in it.")
 
     buttons_data = [
         ("Clear Transcript", lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui), "#1f538d"),
@@ -714,7 +718,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
     # interaction, and it is the only way to reach the on-demand answer.
     ctk.CTkLabel(
         main_control_frame,
-        text="drag across the turns, then Answer",
+        text="drag, or \u2318-click turns, then Answer",
         font=("Arial", 9), text_color="#8a8a8a"
     ).grid(row=len(buttons_data), column=1, padx=5, pady=(0, 2))
 

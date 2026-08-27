@@ -667,9 +667,74 @@ def test_the_transcript_looks_selectable():
     assert 'cursor="hand2"' not in body
 
 
-def test_the_interaction_is_written_down_next_to_the_button():
-    """Not a guessable one, and there is nothing else that reveals it."""
+def test_both_ways_of_choosing_are_written_down():
+    """
+    Neither is guessable, and there is nothing else that reveals them: the
+    pane spent its life looking like a list of clickable rows.
+    """
     import inspect
     from src import app
     body = inspect.getsource(app.create_ui_components)
-    assert "drag across the turns" in body
+    assert "drag" in body and "click turns" in body
+
+
+def test_turns_can_be_picked_one_by_one():
+    """
+    Dragging cannot express the case that matters in a meeting: the question
+    is spread over several of your counterpart's turns with somebody else's in
+    between, and a contiguous selection has to take that somebody else along.
+    """
+    from src.TranscriptUI import TranscriptUI
+    assert hasattr(TranscriptUI, "picked_turns")
+    import inspect
+    body = inspect.getsource(TranscriptUI._configure_textbox)
+    assert "<Command-Button-1>" in body and "<Control-Button-1>" in body
+
+
+def test_picking_is_manual_rather_than_by_label():
+    """
+    Not "select every turn labelled S1". The labels are not reliable enough to
+    filter on -- measured: the same speaker reading out a number and talking
+    scores as two different people -- so filtering by them would quietly drop
+    half of what was wanted.
+    """
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI._toggle_turn)
+    assert "speaker" not in body.lower().split('"""')[-1]
+
+
+def test_picked_turns_survive_the_meeting_carrying_on():
+    """
+    Read from the tag, not from remembered indices. Tk moves tags when text is
+    inserted above them, so a pick made two minutes ago still points at the
+    same words.
+    """
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI.picked_turns)
+    assert 'tag_ranges("picked")' in body
+
+
+def test_picked_turns_are_sent_oldest_first():
+    """The list is newest first; a passage reads in the order it was said."""
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    assert "reversed(turns)" in inspect.getsource(TranscriptUI.picked_turns)
+
+
+def test_picks_win_over_a_drag():
+    """Picking is the more deliberate act, and the only one that can leave a
+    turn out of the middle."""
+    import inspect
+    from src.TranscriptUI import TranscriptUI
+    body = inspect.getsource(TranscriptUI.selected_passage)
+    assert body.index("picked_turns()") < body.index('get("sel.first"')
+
+
+def test_picks_are_cleared_once_answered():
+    """Or the next question silently inherits the last one's turns."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    assert "on_done=transcript_ui.clear_picks" in body
