@@ -289,3 +289,16 @@ def test_setup_mentions_it():
     body = inspect.getsource(cli._setup)
     assert "ensure_api_key" in body
     assert "does not need one" in body
+
+
+def test_choosing_cleanup_without_a_key_asks_for_one():
+    """
+    It used to export with a note saying cleanup had been skipped -- true, and
+    not what was asked for. The CLI backend bills a subscription and is exempt.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    section = body.split("if choices.polish:", 1)[1][:600]
+    assert "ensure_key(" in section
+    assert 'choices.backend == "cli"' in section, "the CLI route needs no key"

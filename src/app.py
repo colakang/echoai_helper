@@ -646,8 +646,17 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
                                  f"{choices.merge_speakers_to} speakers "
                                  f"({changed} lines relabelled).")
             if choices.polish:
-                cleanup_note = _polish_with_progress(
-                    root, conversation_data, choices.backend)
+                # Ask now rather than skipping later. Without this, choosing
+                # cleanup with no key exported the transcript with a note
+                # saying it had been skipped -- true, and not what was asked
+                # for. The CLI backend bills a subscription and needs no key.
+                if choices.backend == "cli" or ensure_key(
+                        "Cleaning up the transcript asks a language model."):
+                    cleanup_note = _polish_with_progress(
+                        root, conversation_data, choices.backend)
+                else:
+                    cleanup_note = ("\n\nCleanup skipped: no key was given, "
+                                    "so the transcript is unchanged.")
 
             if choices.is_markdown:
                 saved = _save_markdown(choices.path, conversation_data,
