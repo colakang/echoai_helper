@@ -22,6 +22,7 @@ Any format ffmpeg reads is fine; it is converted to mono 16kHz internally.
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -181,3 +182,20 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _require_ffmpeg() -> bool:
+    """
+    Checked here rather than at app startup, where it used to be.
+
+    Only this file decodes an audio file, so only this file needs ffmpeg. The
+    app itself goes sounddevice -> numpy -> FunASR and never calls it -- but it
+    refused to start without it, which cost somebody an install: no Homebrew
+    meant no ffmpeg, and the app exited before drawing a window.
+    """
+    if shutil.which("ffmpeg"):
+        return True
+    print("This needs ffmpeg, which decodes the recording.")
+    print("  brew install ffmpeg")
+    print("  or https://ffmpeg.org/download.html")
+    return False

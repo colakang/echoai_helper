@@ -120,10 +120,18 @@ Then:
 ```bash
 uv tool install echoai-helper     # uv fetches a suitable Python itself
 echoai-helper setup               # audio routing — one password prompt
-echoai-helper install-launcher    # adds an icon to Launchpad
+echoai-helper install-launcher    # adds an icon to Launchpad, and opens it
 ```
 
-Launch from Launchpad, or run `echoai-helper`.
+After that, launch from Launchpad or run `echoai-helper`.
+
+**If the icon does nothing**, the app is reporting something it cannot show
+you. It writes everything to `~/Library/Logs/EchoAI Helper.log`; the last few
+lines say what stopped it:
+
+```bash
+tail -20 "$HOME/Library/Logs/EchoAI Helper.log"
+```
 
 **Apple Silicon.** Transcription runs on Metal and keeps up comfortably.
 **Intel Macs install and run, but see [known limitations](#-known-limitations)** —

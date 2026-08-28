@@ -187,3 +187,71 @@ def test_the_launcher_runs_a_module_not_a_file():
     """
     from src.launcher_macos import LAUNCH_SCRIPT
     assert '-m "$MODULE"' in LAUNCH_SCRIPT
+
+
+# --------------------------------------------------------------------------
+# Starting the app, and failing where it can be seen
+# --------------------------------------------------------------------------
+
+def test_install_launcher_opens_the_app():
+    """
+    Installing an icon is not the goal; having the app running is. This is the
+    last of the three commands the README gives you, and it used to end by
+    telling you where to find something you then had to go and click.
+    """
+    import inspect
+    from src import cli
+    body = inspect.getsource(cli._launcher)
+    assert '"open"' in body
+    assert "no_open" in body
+
+
+def test_opening_can_be_declined():
+    """Scripted installs should not have a window appear on them."""
+    import inspect
+    from src import cli
+    body = inspect.getsource(cli.main)
+    assert "--no-open" in body
+
+
+def test_a_startup_failure_is_shown_not_only_logged():
+    """
+    Reported as "it crashed with no message". It had not crashed: it printed a
+    complaint and returned, and from the Launchpad icon that text goes to a log
+    file nobody has been told about while no window ever appears.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._fatal)
+    assert "display alert" in body
+    assert "isatty" in body, "a terminal already shows the print"
+
+
+def test_nothing_waits_on_stdin_at_startup():
+    """
+    The missing-key path called input("Press Enter to exit..."). A GUI launch
+    has no stdin, so that was worse than invisible.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    assert "input(" not in body
+
+
+def test_the_app_does_not_require_ffmpeg():
+    """
+    It never calls it -- capture is sounddevice -> numpy -> FunASR, with no
+    file decoding anywhere. Verified by transcribing with ffmpeg absent from
+    PATH. The check that used to be here refused to start the app without it,
+    which cost somebody an install: no Homebrew meant no ffmpeg.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    assert 'subprocess.run(["ffmpeg"' not in body
+
+
+def test_the_scripts_that_do_need_it_check_for_themselves():
+    import scripts.check_audio, scripts.calibrate_vad
+    assert hasattr(scripts.check_audio, "_require_ffmpeg")
+    assert hasattr(scripts.calibrate_vad, "_require_ffmpeg")
