@@ -127,3 +127,28 @@ def test_the_upper_bound_is_explained():
     root = Path(__file__).resolve().parent.parent
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
     assert "onnxruntime" in pyproject.split("requires-python")[1][:900]
+
+
+def test_the_readme_states_the_macos_prerequisites():
+    """
+    Both came from a real first install on somebody else's Mac. The Command
+    Line Developer Tools prompt can appear part-way through and reads as a
+    failure; uv is assumed by the very first install command and was never
+    explained.
+    """
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert "xcode-select --install" in readme
+    assert "astral.sh/uv/install.sh" in readme
+
+
+def test_homebrew_is_documented_as_optional():
+    """
+    It is not required any more -- setup fetches the driver directly when it is
+    absent. Listing it as a prerequisite would send people to install a package
+    manager they do not need.
+    """
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    section = readme.split("Homebrew", 1)[1][:400]
+    assert "optional" in section.lower() or "Not required" in section

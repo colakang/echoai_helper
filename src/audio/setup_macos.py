@@ -109,6 +109,120 @@ def pick_listening_device() -> Optional[ca.Device]:
 # BlackHole
 # --------------------------------------------------------------------------
 
+# Homebrew's own metadata for the cask: the current version, the vendor's
+# download URL, and a checksum. Used even when Homebrew itself is absent,
+# because somebody has to say which build is current and Homebrew already
+# tracks it.
+BLACKHOLE_CASK_API = "https://formulae.brew.sh/api/cask/blackhole-2ch.json"
+
+
+def _install_blackhole_pkg(progress=print) -> bool:
+    """
+    Install BlackHole without Homebrew, from the vendor's own package.
+
+    Needed because requiring a package manager in order to install one audio
+    driver is a poor trade, and it is where a first install actually stopped:
+    "Homebrew is not installed". The advice then was to fetch it by hand from
+    existential.audio -- which asks for an email address before it will hand
+    over the file.
+
+    The download URL and its checksum come from Homebrew's cask metadata, so
+    the version tracks whatever Homebrew considers current without Homebrew
+    needing to be here.
+
+    The checksum is verified before anything is run. This installs a system
+    audio driver with administrator rights; running an unverified download
+    that way is not a risk worth taking to save a step.
+    """
+    import hashlib
+    import json
+    import tempfile
+    import urllib.request
+
+    def fetch(url, timeout):
+        # A User-Agent is required, not merely polite: the vendor's CDN answers
+        # urllib's default with 406 Not Acceptable, so this fails for everyone
+        # without it.
+        request = urllib.request.Request(
+            url, headers={"User-Agent": "echoai-helper (+https://github.com/"
+                                        "colakang/echoai_helper)"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+
+    try:
+        meta = json.loads(fetch(BLACKHOLE_CASK_API, 30))
+        url, expected = meta["url"], meta["sha256"]
+        version = meta.get("version", "?")
+    except Exception as e:
+        progress(f"Could not look up the BlackHole download: {e}")
+        progress("Install it from https://existential.audio/blackhole/ "
+                 "and run this again.")
+        return False
+
+    progress(f"Downloading BlackHole {version}...")
+    try:
+        payload = fetch(url, 120)
+    except Exception as e:
+        progress(f"Download failed: {e}")
+        return False
+
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != expected:
+        progress("The download did not match its published checksum, so it "
+                 "was discarded. Nothing has been installed.")
+        progress(f"  expected {expected}")
+        progress(f"  received {actual}")
+        return False
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pkg = os.path.join(tmp, "BlackHole.pkg")
+        with open(pkg, "wb") as f:
+            f.write(payload)
+
+        progress("Installing (macOS will ask for your password)...")
+        # osascript rather than sudo: this runs from a terminal and from the
+        # app's first-run flow, and only the GUI prompt works in both.
+        #
+        # Quoted twice, deliberately. Interpolating Python's repr() looked
+        # fine and is wrong: repr switches to double quotes when the string
+        # contains a single one, and the AppleScript literal it lands inside
+        # is itself double-quoted -- so a home directory belonging to anyone
+        # called O'Brien would end the string early. `quoted form of` handles
+        # the shell layer; escaping backslash and quote handles the
+        # AppleScript layer.
+        literal = pkg.replace("\\", "\\\\").replace('"', '\\"')
+        script = ('do shell script "installer -pkg " & quoted form of '
+                  f'"{literal}" & " -target /" with administrator privileges')
+        try:
+            completed = subprocess.run(["osascript", "-e", script],
+                                       capture_output=True, text=True,
+                                       timeout=600)
+        except subprocess.TimeoutExpired:
+            progress("The installer did not finish in time.")
+            return False
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        if "User canceled" in detail or "-128" in detail:
+            progress("Cancelled at the password prompt; nothing was installed.")
+        else:
+            progress(f"Install failed: {detail[-300:]}")
+        return False
+    return True
+
+
+def _await_blackhole(progress=print) -> bool:
+    """CoreAudio publishes a new driver asynchronously; give it a moment."""
+    for _ in range(20):
+        if ca.find_device(BLACKHOLE_NAME):
+            progress("BlackHole is ready.")
+            return True
+        time.sleep(0.5)
+    progress("BlackHole was installed but has not appeared yet. "
+             "A restart of the app usually settles it.")
+    return False
+
+
 def install_blackhole(progress=print) -> bool:
     """
     Install the virtual audio driver.
@@ -122,11 +236,11 @@ def install_blackhole(progress=print) -> bool:
         return True
 
     if shutil.which("brew") is None:
-        progress("Homebrew is not installed, so BlackHole cannot be installed "
-                 "automatically.")
-        progress("Install it manually from https://existential.audio/blackhole/ "
-                 "and run this again.")
-        return False
+        progress("Homebrew is not installed; fetching BlackHole directly.")
+        if not _install_blackhole_pkg(progress):
+            return False
+        reload_coreaudio(progress)
+        return _await_blackhole(progress)
 
     progress("Installing BlackHole (macOS will ask for your password)...")
     try:

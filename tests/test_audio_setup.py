@@ -268,3 +268,120 @@ def test_restoring_clears_the_record(monkeypatch, fake, tmp_path):
     setup.ensure_active(progress=lambda *_: None)
     setup.restore(progress=lambda *_: None)
     assert not state.exists()
+
+
+# --------------------------------------------------------------------------
+# Installing BlackHole without Homebrew
+# --------------------------------------------------------------------------
+#
+# Reported from a first install on someone else's Mac: `echoai-helper setup`
+# stopped at "Homebrew is not installed". Requiring a package manager in order
+# to install one audio driver is a poor trade, and the advice it gave --
+# fetch it by hand from existential.audio -- leads to a page that asks for an
+# email address before it will hand over the file.
+
+def test_there_is_a_route_without_homebrew():
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos.install_blackhole)
+    assert "_install_blackhole_pkg" in body
+    assert 'shutil.which("brew") is None' in body
+
+
+def test_the_download_is_checksummed_before_anything_runs():
+    """
+    This installs a system audio driver with administrator rights. Running an
+    unverified download that way is not a risk worth taking to save a step.
+    """
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._install_blackhole_pkg)
+    assert "sha256" in body
+    assert body.index("hashlib.sha256(payload)") < body.index("installer -pkg")
+
+
+def test_a_mismatched_download_installs_nothing():
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._install_blackhole_pkg)
+    guard = body.split("if actual != expected:", 1)[1][:400]
+    assert "return False" in guard
+    assert "Nothing has been installed" in guard
+
+
+def test_the_request_sets_a_user_agent():
+    """
+    Not politeness. The vendor's CDN answers urllib's default User-Agent with
+    406 Not Acceptable, so without one this fails for every user -- which is
+    how it behaved when first written.
+    """
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._install_blackhole_pkg)
+    assert "User-Agent" in body
+
+
+def test_the_version_is_not_hardcoded():
+    """
+    Taken from Homebrew's cask metadata, which tracks what is current. A
+    pinned URL goes stale and takes the checksum with it.
+    """
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._install_blackhole_pkg)
+    assert "BLACKHOLE_CASK_API" in body
+    assert ".pkg" not in setup_macos.BLACKHOLE_CASK_API
+
+
+def test_the_password_prompt_works_from_both_places():
+    """
+    setup runs from a terminal and from the app's first-run flow. sudo prompts
+    on a tty that the second one does not have; the osascript dialog works in
+    both.
+    """
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._install_blackhole_pkg)
+    assert "with administrator privileges" in body
+
+
+def test_cancelling_the_prompt_is_not_reported_as_a_failure():
+    """Declining a password is a decision, not an error."""
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._install_blackhole_pkg)
+    assert "User canceled" in body
+
+
+def test_the_installer_path_is_quoted_for_both_layers():
+    """
+    The path lands inside an AppleScript string literal, which then goes to a
+    shell. Interpolating Python's repr() looked fine and was wrong: repr
+    switches to double quotes when the value contains a single one, and the
+    literal it sits inside is double-quoted -- so a home directory belonging
+    to anyone called O'Brien would end the string early and the failure would
+    surface at the password prompt, which is the worst place to debug.
+    """
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._install_blackhole_pkg)
+    assert "quoted form of" in body, "the shell layer"
+    assert 'replace(\'"\'' in body, "the AppleScript layer"
+    assert "{pkg!r}" not in body
+
+
+@pytest.mark.parametrize("path", [
+    "/tmp/x/BlackHole.pkg",
+    "/Users/O'Brien/tmp/BlackHole.pkg",
+    '/tmp/we"ird/BlackHole.pkg',
+    "/tmp/back\\slash/BlackHole.pkg",
+])
+def test_the_applescript_literal_survives_awkward_paths(path):
+    literal = path.replace("\\", "\\\\").replace('"', '\\"')
+    script = ('do shell script "installer -pkg " & quoted form of '
+              f'"{literal}" & " -target /" with administrator privileges')
+    body = script.split("quoted form of ", 1)[1].split(' & " -target', 1)[0]
+    assert body.startswith('"') and body.endswith('"')
+    # No unescaped quote may appear inside, or the literal ends early.
+    inner = body[1:-1]
+    assert '"' not in inner.replace('\\"', "")

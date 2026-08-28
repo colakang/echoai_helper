@@ -70,13 +70,50 @@ https://github.com/user-attachments/assets/0d627e4a-960b-4628-8bbc-8d892f02cfd1
 
 ## ⚡ Install
 
-### macOS
+### Before you start (macOS)
 
-If you do not have `uv`:
+Two things a fresh Mac tends to be missing. Both are one command, and the first
+is easy to mistake for something having gone wrong.
+
+**Command Line Developer Tools.** macOS ships stubs for `git` and the
+compilers; touching one pops a dialog saying the tools must be installed. It
+can appear part-way through an install, which reads like a failure and is not.
+Get it over with first:
+
+```bash
+xcode-select --install
+```
+
+If they are already there it says so and exits non-zero, which looks like a
+failure and is not.
+
+**uv**, which is how this is installed:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+It fetches its own Python, which matters: this needs 3.12 or 3.13, and the
+Python on your Mac is probably 3.9 (Apple's) or 3.14 (Homebrew's).
+
+<details>
+<summary>Homebrew — optional, and what it changes</summary>
+
+Not required. `echoai-helper setup` installs the virtual audio device either
+way: with Homebrew if you have it, and otherwise by fetching the vendor's
+package directly and verifying its checksum before anything runs.
+
+Having it means the audio driver is tracked like anything else you installed,
+so `brew uninstall --cask blackhole-2ch` removes it cleanly. Without it the
+driver is still perfectly removable, just by hand.
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+</details>
+
+### macOS
 
 Then:
 
