@@ -97,6 +97,11 @@ you hear a meeting while it is being recorded. macOS asks for a password once,
 because that installs an audio driver — nothing else needs a privilege, and
 Audio MIDI Setup is not involved.
 
+Homebrew is used if you have it, so the driver is tracked and can be removed
+the same way. If you do not, the package is fetched from the vendor directly
+and its checksum verified before anything runs; you are not asked to install a
+package manager to get one audio driver.
+
 The app takes the audio output while it runs and gives it back silently when it
 quits, including after a crash. `echoai-helper setup --restore` does it by hand;
 `--status` shows what routing is in place.
