@@ -69,8 +69,11 @@ def main(argv=None) -> int:
                            help="point system audio back at your speakers")
 
     launcher_cmd = sub.add_parser(
-        "install-launcher", help="add a double-clickable icon")
+        "install-launcher", help="add a double-clickable icon, and open it")
     launcher_cmd.add_argument("--uninstall", action="store_true")
+    launcher_cmd.add_argument(
+        "--no-open", action="store_true",
+        help="install the icon without starting the app")
 
     # Registered so it appears in --help. Its arguments are handled before
     # argparse ever sees them -- see the note at the top of main().
@@ -179,7 +182,22 @@ def _launcher(args) -> int:
     from src import launcher_macos as launcher
     if args.uninstall:
         return 0 if launcher.uninstall() else 1
-    launcher.install()
+
+    app = launcher.install()
+
+    # Open it, unless asked not to. Installing an icon is not the goal --
+    # having the app running is, and this is the last step of the three the
+    # README gives you. Leaving the user to go and find the icon they have
+    # just been told about is a step that exists only because nobody removed
+    # it.
+    if not args.no_open:
+        import subprocess
+        print("Starting it now...")
+        try:
+            subprocess.run(["open", str(app)], check=True, timeout=30)
+        except Exception as e:
+            print(f"Could not open it automatically: {e}")
+            print(f"It is in Launchpad, or: open {str(app)!r}")
     return 0
 
 

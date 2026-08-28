@@ -1212,28 +1212,53 @@ def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
     threading.Thread(target=watch, daemon=True, name="mic-heartbeat").start()
 
 
+def _fatal(title, message):
+    """
+    Report a startup problem the user can see, and stop.
+
+    Everything here used to print and return. From a terminal that is fine.
+    From the Launchpad icon there is no terminal: the text goes to a log file
+    nobody has been told about, the window never appears, and the app looks
+    like it crashed on launch with no explanation -- which is exactly how it
+    was reported.
+
+    One of these paths was worse than invisible. A missing API key called
+    input("Press Enter to exit..."), and a GUI launch has no stdin to read.
+    """
+    print(f"ERROR: {title}\n{message}")
+    if not sys.stdin.isatty():
+        try:
+            body = message.replace('"', "'").replace("\n", "  ")
+            subprocess.run(
+                ["osascript", "-e",
+                 f'display alert "EchoAI Helper — {title}" message "{body}"'],
+                capture_output=True, timeout=120)
+        except Exception:
+            pass          # the print above is still there
+
+
 def main():
     try:
         # 初始化环境配置
         EnvConfig.initialize()
         if not EnvConfig.ensure_api_key():
-            print("Please set up your OpenAI API key and restart the application.")
-            input("Press Enter to exit...")
+            _fatal("No API key",
+                   "Put an OpenAI key in a file called .llm, or set "
+                   "OPENAI_API_KEY, then start the app again.")
             return
-                
-        # ffmpeg has to be on PATH, and a double-clicked app has almost none:
-        # no shell runs, so nothing from a profile applies and Homebrew is
-        # invisible. The launcher puts the Homebrew prefixes back; say so here,
-        # because "not installed" is misleading when it is installed and merely
-        # unreachable.
-        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL)
-    except FileNotFoundError:
-        print("ERROR: ffmpeg was not found on PATH.")
-        print(f"       PATH is: {os.environ.get('PATH', '')}")
-        print("       Install it with:  brew install ffmpeg")
-        print("       If it is installed, the launcher needs reinstalling:")
-        print("           echoai-helper install-launcher")
+
+        # There is deliberately no ffmpeg check here any more. There was one,
+        # and it refused to start the app without it -- for a program that
+        # never calls it. Capture goes sounddevice -> numpy -> FunASR, with no
+        # file decoding anywhere; verified by transcribing with ffmpeg removed
+        # from PATH entirely.
+        #
+        # It cost somebody an install: no Homebrew meant no ffmpeg, and the
+        # app exited before drawing a window, printing its complaint into a log
+        # nobody had been told about. Only scripts/calibrate_vad.py and
+        # `check-audio --record` decode files, and each checks for itself.
+    except Exception as e:
+        _fatal("Could not start", str(e))
         return
 
     TemplateManager.ensure_template_directories()
