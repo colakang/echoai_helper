@@ -323,8 +323,18 @@ Both `auto` values are load-bearing rather than lazy defaults:
   the syllables onto words of that language. A Cantonese call transcribed with
   `language: "en"` comes back as fluent nonsense.
 
-An OpenAI key goes in `.env` (see `.env.example`), or in a file called `.llm`
-holding nothing else. Both are gitignored.
+**An OpenAI key is optional.** Transcription runs on your machine and needs no
+account. The key is for the reply suggestions and the cleanup pass at export;
+the app asks for one the first time you use either, and remembers it.
+
+To set it up front:
+
+```bash
+echoai-helper key
+```
+
+It is stored in the user config directory, readable only by you. A checkout's
+own `.llm` or `.env` still works for development.
 
 ---
 

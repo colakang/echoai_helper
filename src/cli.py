@@ -77,6 +77,10 @@ def main(argv=None) -> int:
 
     # Registered so it appears in --help. Its arguments are handled before
     # argparse ever sees them -- see the note at the top of main().
+    key_cmd = sub.add_parser(
+        "key", help="store an OpenAI key for replies and export cleanup")
+    key_cmd.add_argument("value", nargs="?", help="the key; prompted if omitted")
+
     sub.add_parser("check-audio",
                    help="list devices and diagnose capture "
                         "(--record, --selftest, --source)")
@@ -122,11 +126,34 @@ def main(argv=None) -> int:
     if command == "sessions":
         return _sessions(args)
 
+    if command == "key":
+        return _key(args)
+
     if command == "config":
         return _config()
 
     from .app import main as run_app
     run_app()
+    return 0
+
+
+def _key(args) -> int:
+    """
+    Store the API key where the app will find it.
+
+    Written to the user config directory. A key put beside the app is in
+    site-packages once this is installed from a wheel -- not a place to keep a
+    secret, and a reinstall would delete it.
+    """
+    import getpass
+    from src.config import EnvConfig
+
+    value = args.value or getpass.getpass("OpenAI key (sk-...): ")
+    problem = EnvConfig.save_key(value)
+    if problem:
+        print(problem)
+        return 1
+    print(f"  Saved to {EnvConfig.key_file()}")
     return 0
 
 
@@ -171,6 +198,17 @@ def _setup(args) -> int:
     state = setup.run(auto_activate=True)
     print()
     print(state.describe())
+
+    # Said here because this is where somebody is being walked through the
+    # install, and it is the one thing setup cannot arrange for them. Not a
+    # requirement: transcription is local and needs no account.
+    from src.config import EnvConfig
+    if not EnvConfig.ensure_api_key():
+        print()
+        print("No OpenAI key is configured. Transcription does not need one --")
+        print("it runs on this machine. The reply suggestions and the cleanup")
+        print("pass at export do; the app will ask when you use them, or:")
+        print(f"    echoai-helper key")
     return 0 if state.ready else 1
 
 
