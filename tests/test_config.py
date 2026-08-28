@@ -152,3 +152,16 @@ def test_homebrew_is_documented_as_optional():
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
     section = readme.split("Homebrew", 1)[1][:400]
     assert "optional" in section.lower() or "Not required" in section
+
+
+def test_the_readme_says_how_to_upgrade():
+    """
+    It only ever said how to install. `uv tool install` on something already
+    installed is a no-op that reports "already installed", which reads as "you
+    are up to date" -- so anyone on an older version stayed there believing
+    otherwise.
+    """
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert "uv tool upgrade echoai-helper" in readme
+    assert "already installed" in readme, "and why install alone does not do it"

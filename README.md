@@ -184,6 +184,28 @@ microphone was found to die silently in the first place.
 If you run it somewhere not on this list, an issue saying so — working or
 not — is genuinely useful.
 
+### Upgrading
+
+```bash
+uv tool upgrade echoai-helper
+```
+
+Not `uv tool install` again — that is a no-op on something already installed
+and says so, which is easy to read as "you are up to date" when you are not:
+
+```
+`echoai-helper` is already installed
+```
+
+If a release landed in the last few minutes, add `--refresh`; `uv` caches the
+package index, and without it an upgrade can quietly fetch the version before
+the one you came for.
+
+Re-run `echoai-helper install-launcher` after upgrading if you use the
+Launchpad icon. The bundle holds a generated script rather than a copy of the
+program, so it keeps working across upgrades — but the icon and the launch
+script itself are only rewritten when you run that again.
+
 ### First run
 
 Speech models (~1.5GB) download on first launch. Nothing else is needed.
