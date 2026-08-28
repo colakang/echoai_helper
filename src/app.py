@@ -1252,7 +1252,7 @@ def _start_mic_heartbeat(backend, recorders, queues, on_rebuilt=None):
     threading.Thread(target=watch, daemon=True, name="mic-heartbeat").start()
 
 
-def _fatal(title, message):
+def _fatal(title, message, window=None):
     """
     Report a startup problem the user can see, and stop.
 
@@ -1266,9 +1266,30 @@ def _fatal(title, message):
     input("Press Enter to exit..."), and a GUI launch has no stdin to read.
     """
     print(f"ERROR: {title}\n{message}")
+
+    # Take the window down first. By the time anything here can fail there is
+    # a splash on screen with no event loop behind it -- it accepts no clicks
+    # and cannot be closed, so an alert on top of it reads as a dialog that
+    # will not go away.
+    if window is not None:
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
     if not sys.stdin.isatty():
         try:
-            body = message.replace('"', "'").replace("\n", "  ")
+            # Trimmed, because these messages are not written for a dialog. A
+            # funasr load failure is several thousand characters -- the whole
+            # registry plus every optional import that did not resolve -- and
+            # `display alert` sizes itself to fit, so the box grew past the
+            # edge of the screen and took its OK button with it. The full text
+            # is in the log either way.
+            body = message.strip().splitlines()[0] if message.strip() else ""
+            if len(body) > 300:
+                body = body[:300].rstrip() + "..."
+            body += "\n\nFull details: ~/Library/Logs/EchoAI Helper.log"
+            body = body.replace('"', "'").replace("\n", "  ")
             subprocess.run(
                 ["osascript", "-e",
                  f'display alert "EchoAI Helper — {title}" message "{body}"'],
@@ -1334,7 +1355,69 @@ def main():
         return
 
 
-    model = TranscriberModels.get_model('--api' in sys.argv)
+    # The window comes up before the models load, not after.
+    #
+    # get_model() downloads about 1.5GB on a first run. It used to happen with
+    # no window on screen at all, so macOS marked the app "Application Not
+    # Responding" and offered Force Quit -- which is what somebody trying it
+    # for the first time did, reasonably, because nothing said it was working.
+    root = ctk.CTk()
+    root.title("EchoAI 365 (Helper Mode)")
+    root.geometry("520x180")
+    splash = ctk.CTkFrame(root, fg_color="transparent")
+    splash.pack(expand=True, fill="both", padx=30, pady=24)
+    ctk.CTkLabel(splash, text="Preparing speech recognition",
+                 font=("Arial", 16)).pack(pady=(6, 4))
+    splash_detail = ctk.CTkLabel(
+        splash, text="Downloading the models — about 1.5GB, first run only.",
+        font=("Arial", 12), text_color="#8a8a8a", wraplength=440)
+    splash_detail.pack()
+    splash_progress = ctk.CTkProgressBar(splash, width=420, mode="indeterminate")
+    splash_progress.pack(pady=14)
+    splash_progress.start()
+    root.update()
+
+    loaded = {}
+
+    def _load_models():
+        try:
+            loaded["model"] = TranscriberModels.get_model('--api' in sys.argv)
+        except Exception as exc:            # noqa: BLE001 - reported below
+            loaded["error"] = exc
+
+    threading.Thread(target=_load_models, daemon=True, name="ModelLoad").start()
+
+    # Generous, but a bound. Without one the app waits forever: the model
+    # client retries a failing download indefinitely, and an hour of retrying
+    # is indistinguishable from a hang.
+    MODEL_LOAD_LIMIT = 20 * 60
+    started = time.monotonic()
+    while not loaded:
+        if time.monotonic() - started > MODEL_LOAD_LIMIT:
+            _fatal("The speech models did not finish downloading",
+                   "The download host is probably unreachable. Run "
+                   "'echoai-helper config' and switch hub between 'hf' and "
+                   "'ms', then start the app again.", window=root)
+            return
+        # Pumping the event loop is what keeps the window alive and macOS
+        # satisfied; without it the app is unresponsive for the whole download.
+        root.update()
+        time.sleep(0.05)
+        waited = int(time.monotonic() - started)
+        if waited >= 20:
+            splash_detail.configure(
+                text=f"Still downloading — about 1.5GB, first run only. "
+                     f"{waited // 60}m {waited % 60:02d}s so far.")
+
+    splash_progress.stop()
+    splash.destroy()
+    root.geometry("1200x800")
+
+    if "error" in loaded:
+        _fatal("Could not load the speech models", str(loaded["error"]),
+               window=root)
+        return
+    model = loaded["model"]
 
     # 创建ResponseManager实例
     response_manager = ResponseManager()
@@ -1392,7 +1475,6 @@ def main():
     #monitor.daemon = True
     #monitor.start()
 
-    root = ctk.CTk()
     widgets = create_ui_components(root, response_manager, transcriber,
                                    mic_queue, speaker_queue, responder)
     transcript_ui = widgets["transcript_ui"]

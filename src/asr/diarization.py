@@ -242,10 +242,31 @@ def _normalise(embedding) -> Optional[np.ndarray]:
     return vector / norm
 
 
+# The same model under each hub's naming. Model ids are hub-specific, and
+# this one was hardcoded to ModelScope's while everything else had moved to
+# HuggingFace -- so a first run fetched two models from one host and then
+# stalled on the third against the other.
+_CAMPPLUS = {
+    "hf": "funasr/campplus",
+    "ms": "iic/speech_campplus_sv_zh-cn_16k-common",
+}
+
+
+def _speaker_model():
+    """(model id, hub) for the embedder, following conf.yaml."""
+    try:
+        import yaml
+        from ..config import PathConfig
+        with open(PathConfig.get_conf_file(), "rb") as f:
+            asr = (yaml.safe_load(f) or {}).get("FunASR", {}) or {}
+    except Exception:
+        asr = {}
+    hub = (asr.get("hub") or "ms").lower()
+    return asr.get("spk_model") or _CAMPPLUS.get(hub, _CAMPPLUS["ms"]), hub
+
+
 class SpeakerEmbedder:
     """CAM++ wrapper. Loaded lazily -- diarization is opt-in."""
-
-    MODEL = "iic/speech_campplus_sv_zh-cn_16k-common"
 
     def __init__(self, device: str = "cpu"):
         self.device = device
@@ -258,8 +279,9 @@ class SpeakerEmbedder:
     def _ensure_model(self):
         if self._model is None:
             from funasr import AutoModel
-            self._model = AutoModel(model=self.MODEL, device=self.device,
-                                    disable_update=True)
+            model_id, hub = _speaker_model()
+            self._model = AutoModel(model=model_id, hub=hub,
+                                    device=self.device, disable_update=True)
             # Metal kernel compilation, paid here rather than on the first
             # thing anyone says.
             if self.device == "mps":
