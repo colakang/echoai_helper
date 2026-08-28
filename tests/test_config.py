@@ -185,9 +185,7 @@ def test_the_documented_uv_commands_exist():
     from pathlib import Path
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
 
-    for command, flag in (("upgrade", None),
-                          ("install", "--refresh"),
-                          ("install", "--force")):
+    for command, flag in (("upgrade", None), ("install", "--force")):
         help_text = subprocess.run(["uv", "tool", command, "--help"],
                                    capture_output=True, text=True).stdout
         if flag:

@@ -205,17 +205,15 @@ and says so, which is easy to read as "you are up to date" when you are not:
 `echoai-helper` is already installed
 ```
 
-`uv` caches the package index, so an upgrade run soon after a release can land
-on the version *before* the one you came for — it reports `Updated … -> v1.4.3`
-and looks entirely successful. Running it again gets there. To go straight to
-the newest:
+If it lands on an older version than you expected, wait a minute and run it
+again. `uv` caches the package index and PyPI takes a moment to propagate, so a
+release published in the last few minutes may not be visible yet — and the
+upgrade reports `Updated … -> v1.4.3` and looks entirely successful either way.
+`echoai-helper version` is the check.
 
-```bash
-uv tool install --force --refresh echoai-helper
-```
-
-`--refresh` belongs to `install`. There is no `uv tool upgrade --refresh`; it
-exits with an error.
+No flag reliably beats that window. `--refresh` on `uv tool install` was tried
+here and still returned the previous version while the new one was live on the
+index; a second attempt a minute later got it.
 
 Re-run `echoai-helper install-launcher` after upgrading if you use the
 Launchpad icon. The bundle holds a generated script rather than a copy of the
