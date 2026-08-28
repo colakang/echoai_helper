@@ -70,13 +70,50 @@ https://github.com/user-attachments/assets/0d627e4a-960b-4628-8bbc-8d892f02cfd1
 
 ## ⚡ Install
 
-### macOS
+### Before you start (macOS)
 
-If you do not have `uv`:
+Two things a fresh Mac tends to be missing. Both are one command, and the first
+is easy to mistake for something having gone wrong.
+
+**Command Line Developer Tools.** macOS ships stubs for `git` and the
+compilers; touching one pops a dialog saying the tools must be installed. It
+can appear part-way through an install, which reads like a failure and is not.
+Get it over with first:
+
+```bash
+xcode-select --install
+```
+
+If they are already there it says so and exits non-zero, which looks like a
+failure and is not.
+
+**uv**, which is how this is installed:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+It fetches its own Python, which matters: this needs 3.12 or 3.13, and the
+Python on your Mac is probably 3.9 (Apple's) or 3.14 (Homebrew's).
+
+<details>
+<summary>Homebrew — optional, and what it changes</summary>
+
+Not required. `echoai-helper setup` installs the virtual audio device either
+way: with Homebrew if you have it, and otherwise by fetching the vendor's
+package directly and verifying its checksum before anything runs.
+
+Having it means the audio driver is tracked like anything else you installed,
+so `brew uninstall --cask blackhole-2ch` removes it cleanly. Without it the
+driver is still perfectly removable, just by hand.
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+</details>
+
+### macOS
 
 Then:
 
@@ -96,11 +133,6 @@ there is no Metal path, so they fall back to the CPU.
 you hear a meeting while it is being recorded. macOS asks for a password once,
 because that installs an audio driver — nothing else needs a privilege, and
 Audio MIDI Setup is not involved.
-
-Homebrew is used if you have it, so the driver is tracked and can be removed
-the same way. If you do not, the package is fetched from the vendor directly
-and its checksum verified before anything runs; you are not asked to install a
-package manager to get one audio driver.
 
 The app takes the audio output while it runs and gives it back silently when it
 quits, including after a crash. `echoai-helper setup --restore` does it by hand;
