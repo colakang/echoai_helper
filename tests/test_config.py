@@ -205,3 +205,100 @@ def test_the_documented_uv_commands_exist():
         if line.startswith("uv tool upgrade"):
             assert "--refresh" not in line, \
                 f"upgrade has no --refresh: {line}"
+
+
+# --------------------------------------------------------------------------
+# The API key
+# --------------------------------------------------------------------------
+#
+# The app refused to start without one, showing an alert and quitting. That is
+# wrong twice over: transcription is local -- FunASR on this machine -- and
+# needs no account at all, and the alert told people to create a file without
+# saying where, while the place it looked was inside site-packages.
+
+def test_the_key_lives_in_the_user_directory():
+    """
+    Not beside the app. Installed from a wheel that is site-packages: not a
+    place to keep a secret, and a reinstall deletes it.
+    """
+    from src.config import EnvConfig, PathConfig
+    assert EnvConfig.key_file().startswith(PathConfig.get_user_config_path())
+
+
+def test_the_user_directory_is_searched_first():
+    import inspect
+    from src.config import EnvConfig
+    body = inspect.getsource(EnvConfig.initialize)
+    assert body.index("get_user_config_path()") < body.index("get_project_root()")
+
+
+def test_a_key_that_is_not_one_is_refused(tmp_path, monkeypatch):
+    from src.config import EnvConfig, PathConfig
+    monkeypatch.setattr(PathConfig, "get_user_config_path",
+                        staticmethod(lambda: str(tmp_path)))
+    for rubbish in ("", "   ", "my-key", "OPENAI_API_KEY"):
+        assert EnvConfig.save_key(rubbish), f"{rubbish!r} should be refused"
+    assert not (tmp_path / ".llm").exists()
+
+
+def test_a_saved_key_is_not_world_readable(tmp_path, monkeypatch):
+    import os
+    import stat
+    from src.config import EnvConfig, PathConfig
+    monkeypatch.setattr(PathConfig, "get_user_config_path",
+                        staticmethod(lambda: str(tmp_path)))
+    assert EnvConfig.save_key("sk-test-not-a-real-key") is None
+    mode = os.stat(tmp_path / ".llm").st_mode
+    assert not (mode & stat.S_IRGRP or mode & stat.S_IROTH)
+
+
+def test_startup_does_not_die_without_a_key():
+    """
+    Recording a meeting must not require an OpenAI account for a feature the
+    user has not reached yet.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    section = body.split("ensure_api_key()", 1)[1][:400]
+    assert "_fatal" not in section
+    assert "return" not in section.split("\n")[1]
+
+
+def test_the_responder_survives_having_no_provider():
+    """It raised, which took the whole app down with it."""
+    import inspect
+    from src.GPTResponder import GPTResponder
+    body = inspect.getsource(GPTResponder.__init__)
+    assert "raise ValueError" not in body
+    assert hasattr(GPTResponder, "has_provider")
+
+
+def test_the_key_can_be_set_without_touching_a_file():
+    """From the app when a feature needs it, or from the command line."""
+    import inspect
+    from src import app, cli
+    assert "simpledialog.askstring" in inspect.getsource(app.create_ui_components)
+    assert hasattr(cli, "_key")
+
+
+def test_setup_mentions_it():
+    """setup walks someone through the install and cannot arrange this one."""
+    import inspect
+    from src import cli
+    body = inspect.getsource(cli._setup)
+    assert "ensure_api_key" in body
+    assert "does not need one" in body
+
+
+def test_choosing_cleanup_without_a_key_asks_for_one():
+    """
+    It used to export with a note saying cleanup had been skipped -- true, and
+    not what was asked for. The CLI backend bills a subscription and is exempt.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.create_ui_components)
+    section = body.split("if choices.polish:", 1)[1][:600]
+    assert "ensure_key(" in section
+    assert 'choices.backend == "cli"' in section, "the CLI route needs no key"

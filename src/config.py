@@ -139,17 +139,50 @@ class EnvConfig:
         return False
 
     @classmethod
+    def key_file(cls) -> str:
+        """Where a key set from the app is written, and looked for first."""
+        return os.path.join(PathConfig.get_user_config_path(), '.llm')
+
+    @classmethod
+    def save_key(cls, key: str) -> Optional[str]:
+        """Store a key for next time. Returns why not, or None."""
+        key = (key or "").strip()
+        if not key:
+            return "No key given."
+        if not key.startswith("sk-"):
+            return ("That does not look like an OpenAI key -- they begin with "
+                    "'sk-'. Nothing was saved.")
+        path = cls.key_file()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(key)
+            os.chmod(path, 0o600)
+        except OSError as e:
+            return f"Could not save it: {e}"
+        os.environ['OPENAI_API_KEY'] = key
+        cls._initialized = True
+        print(f"[INFO] API key saved to {path}")
+        return None
+
+    @classmethod
     def initialize(cls) -> None:
         """初始化环境配置"""
         if cls._initialized:
             return
 
-        root = PathConfig.get_project_root()
+        # The user config directory first. A checkout's own .llm still works,
+        # which is how development has always run -- but installed from a
+        # wheel the project root is site-packages, so a key put "next to the
+        # app" went somewhere nobody should be writing and a reinstall would
+        # have deleted it.
+        for root in (PathConfig.get_user_config_path(),
+                     PathConfig.get_project_root()):
+            if cls._load_bare_key_file(root):
+                cls._initialized = True
+                return
 
-        # 优先读裸密钥文件（.llm 等），其次 .env
-        if cls._load_bare_key_file(root):
-            cls._initialized = True
-            return
+        root = PathConfig.get_project_root()
 
         # 获取.env文件路径
         env_path = os.path.join(root, '.env')

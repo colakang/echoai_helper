@@ -130,9 +130,13 @@ class GPTResponder:
         self._processing = False
         self._last_processed_id = None
 
-        # 初始化LLM provider
+        # Not fatal if it cannot be built. Without a key there is no provider
+        # and no replies -- but transcription is local and carries on, and
+        # raising here took the whole app down with it.
+        self.llm_provider = None
         if not self._initialize_llm_provider():
-            raise ValueError("Failed to initialize LLM provider. Please check your configuration.")
+            print("[INFO] No language model configured; replies are unavailable "
+                  "until a key is set.")
 
     def reload_provider(self) -> bool:
         """
@@ -395,7 +399,12 @@ class GPTResponder:
                          name="AnswerPassage").start()
         return True
 
+    def has_provider(self) -> bool:
+        return self.llm_provider is not None
+
     def _answer(self, question_text, current_response_id, require_length=True):
+        if self.llm_provider is None:
+            return
         previous = self.response_manager.get_response(self._last_processed_id)
         previous_answer = ""
         previous_question = ""

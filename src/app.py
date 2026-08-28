@@ -2,7 +2,7 @@
 
 from datetime import datetime
 import threading
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 import customtkinter as ctk
 import queue
 import time
@@ -601,6 +601,8 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
     # === Column 2: Action Buttons ===
     def export_responses():
         """Export the conversation, optionally cleaning it up first."""
+        # The export itself needs no key; only the optional cleanup pass does,
+        # and that is chosen inside the dialog. Nothing is asked for here.
         try:
             conversation_data = response_manager.export_structured_conversation(
                 transcriber.structured_transcript, reverse_chronological=False,
@@ -644,8 +646,17 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
                                  f"{choices.merge_speakers_to} speakers "
                                  f"({changed} lines relabelled).")
             if choices.polish:
-                cleanup_note = _polish_with_progress(
-                    root, conversation_data, choices.backend)
+                # Ask now rather than skipping later. Without this, choosing
+                # cleanup with no key exported the transcript with a note
+                # saying it had been skipped -- true, and not what was asked
+                # for. The CLI backend bills a subscription and needs no key.
+                if choices.backend == "cli" or ensure_key(
+                        "Cleaning up the transcript asks a language model."):
+                    cleanup_note = _polish_with_progress(
+                        root, conversation_data, choices.backend)
+                else:
+                    cleanup_note = ("\n\nCleanup skipped: no key was given, "
+                                    "so the transcript is unchanged.")
 
             if choices.is_markdown:
                 saved = _save_markdown(choices.path, conversation_data,
@@ -673,7 +684,36 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
             traceback.print_exc()
 
     # === Column 2: Action Buttons ===
+    def ensure_key(reason):
+        """
+        Ask for an API key at the moment one is needed, and remember it.
+
+        Asked here rather than at startup, because startup is the wrong time:
+        transcription is local and needs no account, so demanding a key before
+        the window appears stopped people recording a meeting over a feature
+        they had not reached yet.
+        """
+        if EnvConfig.ensure_api_key():
+            return True
+        key = simpledialog.askstring(
+            "OpenAI API key",
+            f"{reason}\n\nPaste an OpenAI key (sk-...). It is saved to\n"
+            f"{EnvConfig.key_file()}\nand used for nothing else.",
+            show="*", parent=root)
+        if key is None:
+            return False
+        problem = EnvConfig.save_key(key)
+        if problem:
+            messagebox.showwarning("Key not saved", problem)
+            return False
+        if responder is not None:
+            responder.reload_provider()
+        messagebox.showinfo("Saved", "The key is stored. Try that again.")
+        return True
+
     def answer_selection():
+        if not ensure_key("Answering a passage asks a language model."):
+            return
         """
         Answer the passage highlighted in the transcript.
 
@@ -1241,11 +1281,17 @@ def main():
     try:
         # 初始化环境配置
         EnvConfig.initialize()
+        # Deliberately not fatal. Transcription is local -- FunASR on this
+        # machine -- and needs no account at all. The key is for the reply
+        # suggestions and the cleanup pass at export, both optional, and
+        # refusing to start without it stopped people recording a meeting
+        # because of a feature they had not asked for.
+        #
+        # It is asked for at the point it is needed instead, and can be set
+        # from the app.
         if not EnvConfig.ensure_api_key():
-            _fatal("No API key",
-                   "Put an OpenAI key in a file called .llm, or set "
-                   "OPENAI_API_KEY, then start the app again.")
-            return
+            print("[INFO] No API key. Transcription works; replies and export "
+                  "cleanup will ask for one when you use them.")
 
         # There is deliberately no ffmpeg check here any more. There was one,
         # and it refused to start the app without it -- for a program that
