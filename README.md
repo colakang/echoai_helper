@@ -205,9 +205,17 @@ and says so, which is easy to read as "you are up to date" when you are not:
 `echoai-helper` is already installed
 ```
 
-If a release landed in the last few minutes, add `--refresh`; `uv` caches the
-package index, and without it an upgrade can quietly fetch the version before
-the one you came for.
+`uv` caches the package index, so an upgrade run soon after a release can land
+on the version *before* the one you came for — it reports `Updated … -> v1.4.3`
+and looks entirely successful. Running it again gets there. To go straight to
+the newest:
+
+```bash
+uv tool install --force --refresh echoai-helper
+```
+
+`--refresh` belongs to `install`. There is no `uv tool upgrade --refresh`; it
+exits with an error.
 
 Re-run `echoai-helper install-launcher` after upgrading if you use the
 Launchpad icon. The bundle holds a generated script rather than a copy of the

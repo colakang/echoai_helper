@@ -165,3 +165,45 @@ def test_the_readme_says_how_to_upgrade():
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
     assert "uv tool upgrade echoai-helper" in readme
     assert "already installed" in readme, "and why install alone does not do it"
+
+
+def test_the_documented_uv_commands_exist():
+    """
+    Pinned against uv itself, because the README once told people to run
+    `uv tool upgrade --refresh`, which does not exist and errors out. It was
+    "verified" through a grep that swallowed the error, and the version number
+    printed afterwards came from a previous, different command.
+
+    Skipped where uv is absent; this is about the docs being runnable, not
+    about uv being installed.
+    """
+    import shutil
+    import subprocess
+    if not shutil.which("uv"):
+        pytest.skip("uv not installed")
+
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+
+    for command, flag in (("upgrade", None),
+                          ("install", "--refresh"),
+                          ("install", "--force")):
+        help_text = subprocess.run(["uv", "tool", command, "--help"],
+                                   capture_output=True, text=True).stdout
+        if flag:
+            assert f"\n      {flag}" in help_text or f" {flag} " in help_text, \
+                f"uv tool {command} has no {flag}"
+
+    # Only what is inside a fenced block: prose that mentions the broken form
+    # in order to warn about it is not a command anyone will paste.
+    runnable, inside = [], False
+    for line in readme.splitlines():
+        if line.startswith("```"):
+            inside = not inside
+        elif inside:
+            runnable.append(line.strip())
+
+    for line in runnable:
+        if line.startswith("uv tool upgrade"):
+            assert "--refresh" not in line, \
+                f"upgrade has no --refresh: {line}"
