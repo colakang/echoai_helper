@@ -302,3 +302,144 @@ def test_choosing_cleanup_without_a_key_asks_for_one():
     section = body.split("if choices.polish:", 1)[1][:600]
     assert "ensure_key(" in section
     assert 'choices.backend == "cli"' in section, "the CLI route needs no key"
+
+
+# --------------------------------------------------------------------------
+# First-run: the window comes up before the models load
+# --------------------------------------------------------------------------
+#
+# get_model() downloads about 1.5GB on a first run and takes minutes. It used
+# to run with no window on screen, so macOS reported "Application Not
+# Responding" and offered Force Quit -- which is what somebody trying it for
+# the first time did, reasonably, because nothing said it was working.
+
+def test_the_window_is_created_before_the_models_load():
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    assert body.index("ctk.CTk()") < body.index("TranscriberModels.get_model"), \
+        "the window must exist before the download starts"
+
+
+def test_only_one_window_is_created():
+    """The second ctk.CTk() would leave the splash orphaned on screen."""
+    import inspect
+    from src import app
+    assert inspect.getsource(app.main).count("ctk.CTk()") == 1
+
+
+def test_the_event_loop_runs_during_the_download():
+    """
+    Pumping it is what keeps the app responsive. Loading on the main thread
+    without it is indistinguishable from a hang, however good the splash text.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    # The whole wait loop, not a fixed number of characters after a marker --
+    # a comment added later pushed the call out of that window.
+    loop = body.split("while not loaded:", 1)[1].split("splash_progress.stop()", 1)[0]
+    assert "root.update()" in loop
+
+
+def test_the_wait_says_how_long_it_has_been():
+    """A progress bar with no elapsed time still looks stuck after two minutes."""
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    assert "so far." in body
+
+
+def test_a_failed_load_is_reported_not_swallowed():
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    assert 'if "error" in loaded:' in body
+    assert "Could not load the speech models" in body
+
+
+# --------------------------------------------------------------------------
+# Where the models are downloaded from
+# --------------------------------------------------------------------------
+
+def test_the_model_hub_is_one_that_serves_files():
+    """
+    The setting always existed and was "ms". That cost an hour: the ModelScope
+    site answered in under a second while its file downloads timed out over and
+    over -- 213 retries, nothing written to disk. HuggingFace served the same
+    model immediately from the same machine.
+    """
+    import yaml
+    from pathlib import Path
+    from src.config import PathConfig
+    config = yaml.safe_load(Path(PathConfig.get_conf_file()).read_text())
+    assert config["FunASR"]["hub"] == "hf"
+
+
+def test_the_hub_is_declared_once():
+    """
+    A duplicate key is silently resolved by YAML taking the last one, so the
+    file can say "hf" in one place and mean "ms".
+    """
+    from pathlib import Path
+    from src.config import PathConfig
+    text = Path(PathConfig.get_conf_file()).read_text()
+    assert len([l for l in text.splitlines() if l.strip().startswith("hub:")]) == 1
+
+
+def test_the_hub_reaches_the_model():
+    """Configured is not the same as passed through."""
+    import inspect
+    from src.asr import asr_factory
+    assert "hub=" in inspect.getsource(asr_factory)
+
+
+def test_the_download_cannot_wait_forever():
+    """
+    The client retries a failing download indefinitely. An hour of retrying is
+    indistinguishable from a hang, and there was nothing to distinguish it with.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.main)
+    assert "MODEL_LOAD_LIMIT" in body
+    assert "did not finish downloading" in body
+
+
+def test_a_fatal_startup_error_takes_the_window_with_it():
+    """
+    By the time the model load can fail there is a splash on screen and no
+    event loop running behind it, so it accepts no clicks and cannot be
+    closed. The alert on top of it then reads as a dialog that will not go
+    away -- reported exactly that way.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._fatal)
+    assert "window.destroy()" in body
+    assert body.index("window.destroy()") < body.index("display alert"), \
+        "the ghost window must go before the alert appears over it"
+
+    startup = inspect.getsource(app.main)
+    # To the end of the call, not a fixed number of characters -- the message
+    # text is longer than any window I would have guessed.
+    for call in ("did not finish downloading", "Could not load the speech models"):
+        section = startup.split(call, 1)[1].split("return", 1)[0]
+        assert "window=root" in section, f"{call} must dismiss the splash"
+
+
+def test_a_dialog_never_gets_a_wall_of_text():
+    """
+    Reported: the alert was wider than the screen and had to be dismissed with
+    the keyboard because its OK button was off the edge.
+
+    A funasr load failure is several thousand characters -- the whole model
+    registry plus every optional import that did not resolve -- and
+    `display alert` sizes itself to fit whatever it is given.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app._fatal)
+    assert "len(body) > 300" in body
+    assert "splitlines()[0]" in body, "one line, not the whole traceback"
+    assert "Full details:" in body, "and say where the rest is"

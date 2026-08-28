@@ -2,9 +2,14 @@
 ASR_MODEL: "FunASR"
 
 FunASR:
-  model_name: "iic/SenseVoiceSmall" # or "paraformer-zh" or "iic/SenseVoiceSmall" or "FunAudioLLM/Fun-ASR-Nano-2512"
+  # Model ids are hub-specific: the same model is "iic/SenseVoiceSmall" on
+  # ModelScope and "FunAudioLLM/SenseVoiceSmall" on HuggingFace. Changing `hub`
+  # below without changing these gives "model ... is not registered", which
+  # does not sound like a naming problem and is one.
+  model_name: "FunAudioLLM/SenseVoiceSmall"   # ms: iic/SenseVoiceSmall
+
   #vad_model: "fsmn-vad" # this is only used to make it works if audio is longer than 30s
-  punc_model: "ct-punc" # punctuation model.
+  punc_model: "funasr/ct-punc"   # ms: ct-punc
   # "auto" picks cuda, then mps, then cpu. Leave it alone unless you have a
   # reason: naming a device here is wrong on every machine that does not have
   # it, and this file travels between them.
@@ -15,7 +20,18 @@ FunASR:
   # transcription that cannot keep up with the meeting.
   device: "auto"
   ncpu: 4 # number of threads for CPU internal operations (ignored on mps/cuda).
-  hub: "ms" # ms (default) to download models from ModelScope. Use hf to download models from Hugging Face.
+  # Where the models come from on a first run: "hf" (HuggingFace) or "ms"
+  # (ModelScope).
+  #
+  # This was "ms", and it cost somebody an hour. The ModelScope site answers in
+  # under a second, but its file downloads timed out over and over -- 213
+  # retries, nothing written to disk -- and the client has no timeout, so the
+  # app sat there retrying forever with no way to tell it apart from a hang.
+  # HuggingFace served the same model immediately from the same machine.
+  #
+  # ModelScope is usually faster inside mainland China. If that is you, "ms" is
+  # worth trying; if a first run then stalls, put it back.
+  hub: "hf"
   use_itn: True
   # "auto", not a fixed language. SenseVoice detects zh/yue/en/ja/ko per
   # utterance, and pinning it mistranslates everything else: on a real
