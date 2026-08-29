@@ -214,9 +214,10 @@ responsible and they need different things.
 uv tool install --force --refresh echoai-helper
 ```
 
-Without `--refresh` this was observed returning the previous version minutes
-after the new one was live and listed on PyPI; with it, the new version came
-down on the first try.
+`--refresh` is necessary and not sufficient. Without it, the previous version
+came back minutes after the new one was live and listed. With it, one release
+resolved immediately and the next still needed a minute or two of retrying, so
+treat it as removing one obstacle rather than as a guarantee.
 
 The other cache is PyPI's own propagation, and no flag beats that one — a
 release published seconds ago may not be on the index yet, and the upgrade
