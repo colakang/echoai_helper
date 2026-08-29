@@ -317,3 +317,68 @@ def test_the_rewrite_is_applied_exactly_once():
     body = inspect.getsource(GPTResponder.answer_passage)
     assert "_utterance_only(" not in body
     assert "_spoken_words(" in body
+
+
+# --------------------------------------------------------------------------
+# The answer panel
+#
+# `response` holds one answer and each new one overwrites it. The panel was a
+# mirror of that string, so the second answer erased the first from the screen
+# while both were written to the session file.
+# --------------------------------------------------------------------------
+
+class _FakeResponder:
+    def __init__(self, answers, response=""):
+        self.answers = list(answers)
+        self.response = response
+
+
+def test_every_answer_stays_on_screen():
+    from src.app import _rendered_answers
+    shown = _rendered_answers(_FakeResponder(["first", "second", "third"],
+                                             response="third"))
+    assert "first" in shown and "second" in shown and "third" in shown
+    assert shown.index("first") < shown.index("third"), "oldest first"
+
+
+def test_the_newest_answer_is_not_duplicated():
+    """`response` still equals the answer just appended to the list."""
+    from src.app import _rendered_answers
+    assert _rendered_answers(
+        _FakeResponder(["only"], response="only")).count("only") == 1
+
+
+def test_a_repeated_previous_answer_is_not_shown_twice():
+    """
+    When nothing comes back, `response` is set to the previous answer rather
+    than left on a spinner. Rendering the live value unconditionally would
+    print that answer a second time.
+    """
+    from src.app import _rendered_answers
+    shown = _rendered_answers(_FakeResponder(["a", "b"], response="a"))
+    assert shown.count("a") == 1
+
+
+def test_thinking_is_shown_while_it_is_not_yet_an_answer():
+    from src.app import _rendered_answers
+    shown = _rendered_answers(_FakeResponder(["done"], response="Thinking..."))
+    assert "done" in shown and "Thinking..." in shown
+    assert shown.index("done") < shown.index("Thinking...")
+
+
+def test_an_error_reaches_the_panel():
+    from src.app import _rendered_answers
+    shown = _rendered_answers(_FakeResponder([], response="[error] no key"))
+    assert "[error] no key" in shown
+
+
+def test_clearing_the_transcript_clears_the_answers():
+    """
+    They caption the transcript they answer. Left behind, they would sit
+    beside a conversation that is no longer there.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app.clear_context)
+    assert "responder.answers.clear()" in body
+    assert "responder" in inspect.signature(app.clear_context).parameters

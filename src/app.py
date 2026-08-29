@@ -26,9 +26,31 @@ from src import profiles
 from src.TranscriptUI import TranscriptUI
 #import torch
 
+def _rendered_answers(responder):
+    """
+    Everything the panel should be showing, oldest first.
+
+    `responder.response` holds one answer and each new one overwrites it. The
+    panel was a mirror of that string, so answering a second question erased
+    the first from the screen -- while both were written to the session file,
+    which is why an export had answers the user had watched disappear.
+
+    The live value is still shown, because it carries the states that are not
+    answers yet: "Thinking..." while one is being generated, and "[error] ..."
+    when one fails. It is only appended when it is not already in the list --
+    on the path where nothing comes back, `response` is set to the previous
+    answer, which would otherwise be rendered a second time.
+    """
+    parts = list(getattr(responder, "answers", []))
+    live = (responder.response or "").strip()
+    if live and live not in parts:
+        parts.append(live)
+    return "\n\n".join(parts)
+
+
 def update_response_UI(responder, textbox, freeze_state, transcript_ui):
     if not freeze_state[0] and not transcript_ui.is_response_frozen():
-        new_response = responder.response
+        new_response = _rendered_answers(responder)
 
         # 只在响应内容变化时更新
         current_text = textbox.get("1.0", "end-1c")
@@ -41,10 +63,18 @@ def update_response_UI(responder, textbox, freeze_state, transcript_ui):
             except tk.TclError:  # 没有选择时会抛出异常
                 has_selection = False
 
+            # Whether the newest answer should be scrolled to afterwards.
+            # Asked before the text is replaced, because replacing it moves
+            # the view: a reader who has scrolled up to an earlier answer
+            # would otherwise be yanked to the bottom by the next one.
+            at_bottom = textbox.yview()[1] >= 0.99
+
             # 更新文本
             textbox.configure(state="normal")
             textbox.delete("1.0", "end")
             textbox.insert("1.0", new_response)
+            if at_bottom:
+                textbox.see("end")
             
             # 如果之前有选择，恢复选择
             if has_selection:
@@ -399,11 +429,19 @@ def _polish_before_export(conversation_data, backend="config"):
         return f"\n\nCleanup failed ({e}); original transcript saved."
 
 
-def clear_context(transcriber, mic_queue, speaker_queue, transcript_ui):
+def clear_context(transcriber, mic_queue, speaker_queue, transcript_ui,
+                  responder=None):
     """
     Phase 2: 清除所有上下文（双队列版本）
+
+    The answers go with it. They are shown beside the transcript they answer,
+    so leaving them behind after a clear would caption a conversation that is
+    no longer on screen.
     """
     print("Clearing context...")
+    if responder is not None:
+        responder.answers.clear()
+        responder.response = ""
     # 清除transcriber数据
     transcriber.clear_transcript_data()
     # Phase 2: 清除两个音频队列
@@ -748,7 +786,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
                                "That selection had no text in it.")
 
     buttons_data = [
-        ("Clear Transcript", lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui), "#1f538d"),
+        ("Clear Transcript", lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui, responder), "#1f538d"),
         ("Answer Selection", answer_selection, "#7a4a1f"),
         ("Export Conversation", export_responses, "#1B4332"),
         ("Pop Up", None, "#1B4332")
@@ -1551,7 +1589,8 @@ def main():
     root.grid_columnconfigure(1, weight=3)
 
     clear_transcript_button.configure(
-        command=lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui)
+        command=lambda: clear_context(transcriber, mic_queue, speaker_queue,
+                                      transcript_ui, responder)
     )
     def show_popup():
         try:
