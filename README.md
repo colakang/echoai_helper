@@ -269,6 +269,8 @@ by backports that install only when they are missing.
 2. Pick a mode, and set the number of people if you know it.
 3. Hold your meeting. Nothing needs touching — though **Pause Mic** is there for
    the stretches you are muted anyway, and it roughly halves the model's work.
+   **Wear headphones.** On speakers your microphone hears the far end and files
+   it under your own name; see [Known limitations](#-known-limitations).
 4. **Export** — one dialog covers format, cleanup, which model to clean with,
    and merging over-split speakers.
 
@@ -406,6 +408,25 @@ routing, what has been measured, and where the sharp edges are.
 ---
 
 ## 📝 Known limitations
+
+- **Use headphones if you record the microphone. Played through speakers, the
+  far end lands in your own track.** Nothing prevents a microphone hearing a
+  loudspeaker. A meeting app appears to solve this, and does not: Teams and
+  Zoom run echo cancellation on *the stream they send*, subtracting the signal
+  they just played from the microphone before it goes out. That happens inside
+  the app and applies to the audio it transmits. This app opens the input
+  device separately through CoreAudio and receives the raw microphone — echo
+  cancellation was never applied to it and could not be, because the meeting
+  app has no idea this one exists.
+
+  Measured on a session recorded over speakers: the microphone was switched on
+  234 seconds in, and from then on **5 of 21 turns in the "You" track were the
+  far end repeated back**, one of them 0.89 similar to a "Speaker" turn within
+  0.1 seconds. Before the microphone was on, none of it happened.
+
+  Headphones remove the path entirely, which is why that is the advice rather
+  than a setting. **Pause Mic** does the same thing for the stretches where you
+  are only listening.
 
 - **Recovering the microphone interrupts the meeting audio for ~0.4s.** When a
   device dies, PortAudio can only be recovered by restarting it, which

@@ -36,6 +36,16 @@ from . import coreaudio as ca
 BLACKHOLE_NAME = "BlackHole 2ch"
 BLACKHOLE_CASK = "blackhole-2ch"
 
+# A HAL driver is a file in /Library; CoreAudio only publishes it as a device
+# after the daemon reads that directory again. Without this the install
+# genuinely succeeds and the device still is not there.
+#
+# kickstart -k is the documented way and is deterministic; killall is kept
+# behind it because launchd relaunches the daemon either way and the label has
+# not always been spelled the same across releases.
+RESTART_COREAUDIOD = ("launchctl kickstart -k system/com.apple.audio.coreaudiod"
+                      " || killall coreaudiod")
+
 # Named so it is obvious in the Sound menu what it is and what created it.
 MULTI_OUTPUT_NAME = "EchoAI Meeting"
 MULTI_OUTPUT_UID = "ai.echo365.helper.multioutput"
@@ -65,6 +75,32 @@ class SetupState:
         ]
         lines.extend(f"  note: {n}" for n in self.notes)
         return "\n".join(lines)
+
+
+DRIVER_PATH = "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver"
+
+
+def next_step(state: "SetupState") -> str:
+    """
+    What the reader should do, for a state that is not ready.
+
+    A dialog that lists what is missing and stops leaves the reader with a
+    fact and no move. The two failures differ and need different advice: a
+    driver on disk that CoreAudio has not published is one command away, and
+    one that never landed has to be installed again.
+    """
+    if state.blackhole is None:
+        if os.path.exists(DRIVER_PATH):
+            return ("The driver is installed but CoreAudio has not picked it "
+                    "up. Run this in Terminal, then reopen the app:\n\n"
+                    "    sudo killall coreaudiod")
+        return ("The audio driver is not installed. Run `echoai-helper setup` "
+                "in Terminal to install it.")
+    if state.multi_output is None:
+        return ("The virtual device is there but the Multi-Output was not "
+                "built. Run `echoai-helper setup` to finish.")
+    return ("Choose \"%s\" as the output device in System Settings > Sound."
+            % MULTI_OUTPUT_NAME)
 
 
 def inspect() -> SetupState:
@@ -191,8 +227,14 @@ def _install_blackhole_pkg(progress=print) -> bool:
         # the shell layer; escaping backslash and quote handles the
         # AppleScript layer.
         literal = pkg.replace("\\", "\\\\").replace('"', '\\"')
+        # The daemon restart rides along inside the same prompt. It needs root
+        # exactly as much as the install does, and asking twice for one
+        # operation is how people end up cancelling the second half.
         script = ('do shell script "installer -pkg " & quoted form of '
-                  f'"{literal}" & " -target /" with administrator privileges')
+                  f'"{literal}" & " -target / && " & '
+                  # Braced: `A && B || C` would restart the daemon even when
+                  # the install failed, which is the one case it must not.
+                  f'"{{ {RESTART_COREAUDIOD}; }}" with administrator privileges')
         try:
             completed = subprocess.run(["osascript", "-e", script],
                                        capture_output=True, text=True,
@@ -211,15 +253,20 @@ def _install_blackhole_pkg(progress=print) -> bool:
     return True
 
 
-def _await_blackhole(progress=print) -> bool:
+def _await_blackhole(progress=print, quiet: bool = False) -> bool:
     """CoreAudio publishes a new driver asynchronously; give it a moment."""
     for _ in range(20):
         if ca.find_device(BLACKHOLE_NAME):
-            progress("BlackHole is ready.")
+            if not quiet:
+                progress("BlackHole is ready.")
             return True
         time.sleep(0.5)
-    progress("BlackHole was installed but has not appeared yet. "
-             "A restart of the app usually settles it.")
+    if not quiet:
+        # Not "restart the app", which was the advice here and does nothing:
+        # the driver is on disk and the app is not what has to re-read it.
+        progress("The driver is installed but CoreAudio has not published it "
+                 "yet. Run this in a terminal, then start the app again:")
+        progress("    sudo killall coreaudiod")
     return False
 
 
@@ -239,7 +286,10 @@ def install_blackhole(progress=print) -> bool:
         progress("Homebrew is not installed; fetching BlackHole directly.")
         if not _install_blackhole_pkg(progress):
             return False
-        reload_coreaudio(progress)
+        # The pkg path restarts the daemon inside its own prompt; this only
+        # has anything to do if that half was declined.
+        if not _await_blackhole(progress, quiet=True):
+            reload_coreaudio(progress)
         return _await_blackhole(progress)
 
     progress("Installing BlackHole (macOS will ask for your password)...")
@@ -258,16 +308,7 @@ def install_blackhole(progress=print) -> bool:
 
     progress("Reloading CoreAudio so the new driver is picked up...")
     reload_coreaudio(progress)
-
-    for _ in range(20):
-        if ca.find_device(BLACKHOLE_NAME):
-            progress("BlackHole is ready.")
-            return True
-        time.sleep(0.5)
-
-    progress("BlackHole was installed but has not appeared yet. "
-             "A restart will make it available.")
-    return False
+    return _await_blackhole(progress)
 
 
 def reload_coreaudio(progress=print) -> bool:
@@ -277,16 +318,28 @@ def reload_coreaudio(progress=print) -> bool:
     Cheaper than the reboot the installer suggests: it mutes the machine for a
     second or two and is otherwise invisible.
     """
+    # `sudo -n` was tried here first and is wrong: it fails on any machine
+    # that asks for a password, which is every normal one. It failed silently,
+    # both callers discarded the result, and the driver sat on disk unpublished
+    # until the user happened to reboot -- which is why this looked like it
+    # worked. osascript is the same mechanism the installer already uses, and
+    # it prompts from a terminal and from the GUI alike.
     try:
-        completed = subprocess.run(["sudo", "-n", "killall", "coreaudiod"],
-                                   capture_output=True, text=True, timeout=30)
+        completed = subprocess.run(
+            ["osascript", "-e", f'do shell script "{RESTART_COREAUDIOD}" '
+                                'with administrator privileges'],
+            capture_output=True, text=True, timeout=120)
         if completed.returncode == 0:
             time.sleep(2)
             return True
+        detail = (completed.stderr or "").strip()
+        if "User canceled" in detail or "-128" in detail:
+            progress("Cancelled at the password prompt.")
     except Exception:
         pass
 
-    progress("CoreAudio needs restarting. Run this in a terminal:")
+    progress("CoreAudio needs restarting before the driver appears. "
+             "Run this in a terminal:")
     progress("    sudo killall coreaudiod")
     return False
 

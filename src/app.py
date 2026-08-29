@@ -84,7 +84,7 @@ def _run_first_launch_setup(root=None):
     settings = SettingsManager()
     if settings.get_setting("setup_declined"):
         print("[INFO] Audio routing is incomplete; run "
-              "scripts/setup_audio.py to finish it.")
+              "`echoai-helper setup` to finish it.")
         return False
 
     needs_install = state.blackhole is None
@@ -100,8 +100,8 @@ def _run_first_launch_setup(root=None):
         messagebox.showinfo(
             "Recording is limited",
             "Without it, only your microphone is recorded — not the other "
-            "side of the call.\n\nRun scripts/setup_audio.py whenever you "
-            "want to finish.")
+            "side of the call.\n\nRun `echoai-helper setup` in Terminal "
+            "whenever you want to finish.")
         return False
 
     state = setup.run(auto_activate=True)
@@ -112,7 +112,8 @@ def _run_first_launch_setup(root=None):
 
     messagebox.showwarning(
         "Setup did not finish",
-        "Some of it could not be completed:\n\n" + state.describe())
+        "Some of it could not be completed:\n\n" + state.describe()
+        + "\n\n" + setup.next_step(state))
     return False
 
 

@@ -385,3 +385,100 @@ def test_the_applescript_literal_survives_awkward_paths(path):
     # No unescaped quote may appear inside, or the literal ends early.
     inner = body[1:-1]
     assert '"' not in inner.replace('\\"', "")
+
+
+# --------------------------------------------------------------------------
+# Publishing the driver
+#
+# A HAL driver is a file in /Library. CoreAudio only offers it as a device
+# after the daemon re-reads that directory, so an install that does not
+# restart coreaudiod succeeds and produces nothing usable. That is exactly
+# what shipped: `sudo -n killall coreaudiod`, which fails on any machine that
+# asks for a password. It failed quietly, both callers dropped the result, and
+# the driver sat unpublished until the user happened to reboot -- which is
+# what made it look like it worked.
+# --------------------------------------------------------------------------
+
+def test_the_daemon_restart_does_not_need_passwordless_sudo():
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos.reload_coreaudio)
+    assert '"-n"' not in body and "'-n'" not in body, \
+        "sudo -n fails on every machine that asks for a password"
+    assert "with administrator privileges" in body
+
+
+def test_installing_and_publishing_share_one_password_prompt():
+    """
+    Two prompts for one operation is how people end up granting the first and
+    cancelling the second, leaving the driver installed and invisible.
+    """
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._install_blackhole_pkg)
+    assert "RESTART_COREAUDIOD" in body
+    assert body.count("with administrator privileges") == 1
+
+
+def test_a_failed_install_does_not_restart_the_daemon():
+    """
+    `A && B || C` runs C when A fails, which would bounce the machine's audio
+    after an install that did not happen. Checked by running the real shell,
+    because this is a precedence question and reading it is how it got missed.
+    """
+    import subprocess
+    from src.audio.setup_macos import RESTART_COREAUDIOD
+
+    composed = "{ %s; }" % RESTART_COREAUDIOD
+    marker = "RESTARTED"
+    probe = composed.replace("launchctl", f"echo {marker}; :").replace(
+        "killall coreaudiod", f"echo {marker}")
+
+    ran = subprocess.run(["sh", "-c", f"false && {probe}"],
+                         capture_output=True, text=True)
+    assert marker not in ran.stdout, "a failed install must not restart audio"
+
+    ran = subprocess.run(["sh", "-c", f"true && {probe}"],
+                         capture_output=True, text=True)
+    assert marker in ran.stdout, "a successful install must restart audio"
+
+
+def test_the_advice_names_the_thing_that_actually_has_to_restart():
+    """
+    The message here said restarting the app would settle it. The app is not
+    what has to re-read /Library, so that advice could only ever waste the
+    reader's time.
+    """
+    import inspect
+    from src.audio import setup_macos
+    body = inspect.getsource(setup_macos._await_blackhole)
+    assert "coreaudiod" in body
+    assert "restart of the app" not in body.lower()
+
+
+def test_a_missing_driver_on_disk_gets_the_command_that_fixes_it(monkeypatch):
+    """
+    The two ways this fails need different advice, and the dialog that
+    prompted this gave neither.
+    """
+    from src.audio import setup_macos
+    state = setup_macos.SetupState()
+
+    monkeypatch.setattr(setup_macos.os.path, "exists", lambda p: True)
+    assert "killall coreaudiod" in setup_macos.next_step(state)
+
+    monkeypatch.setattr(setup_macos.os.path, "exists", lambda p: False)
+    step = setup_macos.next_step(state)
+    assert "killall" not in step, "nothing to restart if nothing installed"
+    assert "echoai-helper setup" in step
+
+
+def test_the_advice_points_at_a_command_an_installed_user_has():
+    """
+    `scripts/setup_audio.py` is a path in the source tree. Somebody who
+    installed the wheel has no such file and no way to guess what was meant.
+    """
+    import inspect
+    from src import app
+    body = inspect.getsource(app)
+    assert "scripts/setup_audio.py" not in body
