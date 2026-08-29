@@ -125,6 +125,15 @@ class GPTResponder:
         # session is replaced when the transcript is cleared.
         self.session_provider = session_provider
         self.response = ""
+        # Every answer this session, oldest first.
+        #
+        # `response` is one string that each answer overwrites, and the panel
+        # mirrored it exactly -- so the second answer erased the first from
+        # the screen while both were written to disk. Tolerable when replies
+        # were a side feature of interviews and only the newest suggestion
+        # mattered. Wrong once you can pick turns and ask about them: you ask
+        # about one, read it, ask about another, and the first is gone.
+        self.answers = []
         self._response_update_interval = 2
         self._lock = threading.Lock()
         self._processing = False
@@ -444,6 +453,7 @@ class GPTResponder:
 
         if answered:
             print("Generated response: {}".format(self.response))
+            self.answers.append(self.response)
             self._record(current_response_id, question_text, self.response)
         elif self.response == "Thinking...":
             # Nothing came back at all. Leave the previous answer up rather
