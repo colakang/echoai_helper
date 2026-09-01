@@ -6,6 +6,7 @@ src/template_manager.py
 import os
 import re
 import glob
+import shutil
 import traceback
 from typing import List, Optional, Tuple, Dict
 from .SettingsManager import SettingsManager
@@ -47,7 +48,6 @@ class TemplateManager:
         writing because they picked a familiar filename is not a reasonable
         cost for the convenience of skipping a prompt.
         """
-        import shutil
 
         if category not in cls.EXTENSIONS:
             print(f"Invalid template category: {category}")
@@ -102,6 +102,42 @@ class TemplateManager:
             return f"Could not delete {name!r}: {e}"
         print(f"[INFO] Deleted {category} template {name!r}")
         return None
+
+    @classmethod
+    def editable_copy(cls, category: str, name: str) -> Optional[str]:
+        """
+        A path to this template that is safe to edit, or None.
+
+        Editing a shipped template where it lies would not work and would look
+        like it had: the package directory can be read-only, and an upgrade
+        replaces the file, so the change survives until the next release and
+        then vanishes with nothing to explain it. So a shipped one is copied
+        into the user's directory first and the copy is edited -- which is
+        also what resolve_template will pick up afterwards, since it prefers
+        the user's own.
+        """
+        if category not in cls.EXTENSIONS:
+            return None
+
+        user_dir, ext = cls._get_user_paths()[category]
+        mine = os.path.join(user_dir, f"{name}{ext}")
+        if os.path.exists(mine):
+            return mine
+
+        shipped, _ = cls._get_template_paths()[category]
+        original = os.path.join(shipped, f"{name}{ext}")
+        if not os.path.exists(original):
+            return None
+
+        try:
+            os.makedirs(user_dir, exist_ok=True)
+            shutil.copy2(original, mine)
+        except OSError as e:
+            print(f"[WARN] Could not make {name!r} editable: {e}")
+            return None
+        print(f"[INFO] Copied shipped {category} template {name!r} "
+              f"to {mine} for editing")
+        return mine
 
     @classmethod
     def resolve_template(cls, category: str, name: str) -> Optional[str]:
