@@ -14,6 +14,7 @@ story than as three:
 """
 
 import os
+import pathlib
 import sys
 
 import pytest
@@ -587,17 +588,21 @@ def test_asking_does_not_depend_on_the_automatic_switch():
     assert "record_only" not in manual
 
 
-def test_the_import_buttons_do_not_sit_on_the_action_buttons():
+def test_every_template_category_can_be_imported_from_the_menu():
     """
-    They were briefly gridded into column 1, where the action buttons live --
-    small enough to still be clickable, which is how it survived being
-    noticed. Each belongs beside its own dropdown.
+    Replaces a test that guarded where the import buttons were gridded -- they
+    were briefly placed on top of the action buttons, small enough to still be
+    clickable, which is how that survived being noticed.
+
+    There are no import buttons now; the File menu carries it. The concern
+    that outlives them is the one worth keeping: a category that has a
+    dropdown but no way to import into it strands the user with whatever
+    shipped, and nothing about the UI would say so.
     """
-    import inspect
     from src import app
-    body = inspect.getsource(app.create_ui_components)
-    assert 'import_button.grid(row=row, column=0' in body
-    assert 'btn.grid(row=i, column=1' in body
+    from src.TemplateManager import TemplateManager
+    assert set(app._CATEGORY_LABELS) == set(TemplateManager.EXTENSIONS), (
+        "a template category exists that the File menu cannot import")
 
 
 # --------------------------------------------------------------------------
@@ -808,10 +813,110 @@ def test_the_ui_confirms_before_deleting():
     assert "askyesno" in handler
 
 
-def test_the_ui_moves_off_the_deleted_template():
-    """Leaving it selected would apply a template that no longer exists."""
+def _nested_function_source(outer, name):
+    """
+    The body of a closure defined inside `outer`, sliced by indentation.
+
+    Written because three tests in this suite have now been broken by taking
+    a fixed number of characters after a marker: adding a comment pushes the
+    line being asserted on out of the window, and the failure looks like the
+    behaviour was removed rather than like the test cannot see it.
+    """
     import inspect
+    import textwrap
+    lines = inspect.getsource(outer).splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"def {name}"):
+            indent = len(line) - len(line.lstrip())
+            body = [line]
+            for following in lines[i + 1:]:
+                if following.strip() and (
+                        len(following) - len(following.lstrip())) <= indent:
+                    break
+                body.append(following)
+            return textwrap.dedent("\n".join(body))
+    raise AssertionError(f"no nested function {name!r} in {outer.__name__}")
+
+
+def test_deleting_the_live_template_moves_the_selection_off_it():
+    """Leaving it selected would apply a template that no longer exists."""
     from src import app
-    body = inspect.getsource(app.create_ui_components)
-    handler = body.split("def make_remover", 1)[1][:900]
+    handler = _nested_function_source(app.create_ui_components, "make_remover")
     assert "target_var.set(" in handler
+
+
+def test_deleting_another_template_does_not_change_the_selection():
+    """
+    The menu can act on any template, not only the live one. Moving the
+    selection because some unrelated template was tidied up would silently
+    swap the prompt in use mid-meeting.
+    """
+    from src import app
+    handler = _nested_function_source(app.create_ui_components, "make_remover")
+    assert "target_var.get() == name" in handler, \
+        "the selection is moved unconditionally"
+
+
+# --------------------------------------------------------------------------
+# Editing
+# --------------------------------------------------------------------------
+
+def test_editing_a_shipped_template_edits_a_copy(tmp_path, monkeypatch):
+    """
+    Editing it where it lies would not work and would look like it had: the
+    package directory can be read-only, and an upgrade replaces the file, so
+    the change survives until the next release and then disappears with
+    nothing to explain it.
+    """
+    from src.TemplateManager import TemplateManager
+    from src.config import PathConfig
+
+    shipped = tmp_path / "pkg" / "system_role"
+    user = tmp_path / "user" / "system_role"
+    shipped.mkdir(parents=True)
+    user.mkdir(parents=True)
+    (shipped / "inbound_cs.py").write_text("SHIPPED")
+
+    monkeypatch.setattr(PathConfig, "get_prompt_path",
+                        classmethod(lambda cls: str(tmp_path / "pkg")))
+    monkeypatch.setattr(PathConfig, "get_user_prompt_path",
+                        classmethod(lambda cls: str(tmp_path / "user")))
+
+    path = TemplateManager.editable_copy("system_role", "inbound_cs")
+
+    assert path is not None
+    assert str(tmp_path / "user") in path, "must not hand back the shipped file"
+    assert pathlib.Path(path).read_text() == "SHIPPED", "content carried over"
+    assert (shipped / "inbound_cs.py").read_text() == "SHIPPED", "original untouched"
+
+
+def test_editing_an_imported_template_edits_it_in_place(tmp_path, monkeypatch):
+    """No copy: it is already the user's own."""
+    from src.TemplateManager import TemplateManager
+    from src.config import PathConfig
+
+    user = tmp_path / "user" / "case_detail"
+    user.mkdir(parents=True)
+    (user / "mine.txt").write_text("MINE")
+    (tmp_path / "pkg" / "case_detail").mkdir(parents=True)
+
+    monkeypatch.setattr(PathConfig, "get_prompt_path",
+                        classmethod(lambda cls: str(tmp_path / "pkg")))
+    monkeypatch.setattr(PathConfig, "get_user_prompt_path",
+                        classmethod(lambda cls: str(tmp_path / "user")))
+
+    assert TemplateManager.editable_copy("case_detail", "mine") == str(
+        user / "mine.txt")
+
+
+def test_editing_something_that_does_not_exist_returns_nothing(tmp_path,
+                                                               monkeypatch):
+    from src.TemplateManager import TemplateManager
+    from src.config import PathConfig
+    (tmp_path / "pkg" / "knowledge").mkdir(parents=True)
+    (tmp_path / "user" / "knowledge").mkdir(parents=True)
+    monkeypatch.setattr(PathConfig, "get_prompt_path",
+                        classmethod(lambda cls: str(tmp_path / "pkg")))
+    monkeypatch.setattr(PathConfig, "get_user_prompt_path",
+                        classmethod(lambda cls: str(tmp_path / "user")))
+    assert TemplateManager.editable_copy("knowledge", "nope") is None

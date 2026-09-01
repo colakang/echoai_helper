@@ -429,15 +429,161 @@ def _polish_before_export(conversation_data, backend="config"):
         return f"\n\nCleanup failed ({e}); original transcript saved."
 
 
+_CATEGORY_LABELS = {
+    "system_role": "System Role",
+    "case_detail": "Case Detail",
+    "knowledge": "Knowledge Base",
+}
+
+
+def _send_to_focus(root, virtual_event):
+    """
+    Route a menu command to whichever pane has focus.
+
+    Copy and Select All are Text behaviour, not window behaviour: the menu
+    item has to act on the pane the user is in, and there are two of them.
+    """
+    def go():
+        widget = root.focus_get()
+        if widget is not None:
+            widget.event_generate(virtual_event)
+    return go
+
+
+def _build_menubar(root, on_export, on_clear, importers, removers,
+                   editors=None, list_templates=None):
+    """
+    Put the once-in-a-while actions in the menu bar, where macOS keeps them.
+
+    Import and delete were nine 26px buttons wedged around three dropdowns,
+    in the corner of a window whose whole job is to be glanceable during a
+    meeting. They are used a handful of times ever. Export happens once, at
+    the end. None of it belongs beside the controls reached for mid-call.
+
+    What stays on the panel is what gets touched while someone is talking:
+    answering a selection, pausing the mic, the pop-up, and the dropdowns --
+    those last ones because they are as much a status display as a control.
+    Reading which role and model are live should not cost a click.
+
+    Split File/Edit rather than one menu, because Clear Transcript is not a
+    file operation and sat oddly among three that are (all of which open a
+    file dialog). macOS keeps Clear and Delete in Edit, next to Select All.
+
+    Copy and Select All are listed but not implemented here. Tk already binds
+    them at the Text class level -- `<<Copy>>` resolves to `<Mod1-Key-c>` on
+    Aqua -- so they have always worked and nothing said so. Listing them is
+    the whole point: an undiscoverable feature is close to an absent one.
+    Binding them again here would fire them twice.
+
+    One thing about Tk menus on macOS, learned the hard way: `accelerator=`
+    only draws the shortcut beside the label, it does not bind anything. For
+    Export, which is ours, the matching bind_all is required -- without it the
+    menu advertises a key that does nothing, which is worse than showing none.
+    """
+    editors = editors or {}
+    menubar = tk.Menu(root)
+
+    filemenu = tk.Menu(menubar, tearoff=0)
+
+    importmenu = tk.Menu(filemenu, tearoff=0)
+    for key, label in _CATEGORY_LABELS.items():
+        if key in importers:
+            importmenu.add_command(label=f"{label}\u2026",
+                                   command=importers[key])
+    filemenu.add_cascade(label="Import", menu=importmenu)
+
+    if removers and list_templates is not None:
+        manage = tk.Menu(filemenu, tearoff=0)
+        # The submenus are rebuilt every time Manage is opened, and the ones
+        # they replace are destroyed. A menu built once at startup lists the
+        # templates that existed at startup: importing one and then looking
+        # for it here would not find it, and deleting one would leave it on
+        # offer. `delete` alone empties the parent and orphans the children,
+        # which leaks a widget per open.
+        built = []
+
+        def rebuild():
+            manage.delete(0, "end")
+            while built:
+                built.pop().destroy()
+            for key, label in _CATEGORY_LABELS.items():
+                if key not in removers:
+                    continue
+                category_menu = tk.Menu(manage, tearoff=0)
+                built.append(category_menu)
+                names = list_templates(key) or []
+                if not names:
+                    category_menu.add_command(label="(none imported)",
+                                              state="disabled")
+                for name in names:
+                    actions = tk.Menu(category_menu, tearoff=0)
+                    built.append(actions)
+                    if key in editors:
+                        actions.add_command(
+                            label="Edit\u2026",
+                            command=(lambda k=key, n=name: editors[k](n)))
+                    actions.add_command(
+                        label="Delete\u2026",
+                        command=(lambda k=key, n=name: removers[k](n)))
+                    category_menu.add_cascade(label=name, menu=actions)
+                manage.add_cascade(label=label, menu=category_menu)
+
+        manage.configure(postcommand=rebuild)
+        rebuild()
+        filemenu.add_cascade(label="Manage Templates", menu=manage)
+
+    filemenu.add_separator()
+    filemenu.add_command(label="Export Conversation\u2026",
+                         accelerator="Command-E", command=on_export)
+    menubar.add_cascade(label="File", menu=filemenu)
+
+    editmenu = tk.Menu(menubar, tearoff=0)
+    editmenu.add_command(label="Copy", accelerator="Command-C",
+                         command=_send_to_focus(root, "<<Copy>>"))
+    editmenu.add_command(label="Select All", accelerator="Command-A",
+                         command=_send_to_focus(root, "<<SelectAll>>"))
+    editmenu.add_separator()
+    # Deliberately no accelerator. This discards a meeting that cannot be
+    # recovered, and a shortcut is a thing you hit by accident.
+    editmenu.add_command(label="Clear Transcript\u2026", command=on_clear)
+    menubar.add_cascade(label="Edit", menu=editmenu)
+
+    root.config(menu=menubar)
+
+    # The half `accelerator=` does not do. Only for Export: Copy and Select
+    # All are already bound by Tk, and binding them again fires them twice.
+    root.bind_all("<Command-e>", lambda _e: on_export())
+    return menubar
+
+
 def clear_context(transcriber, mic_queue, speaker_queue, transcript_ui,
-                  responder=None):
+                  responder=None, confirm=True):
     """
     Phase 2: 清除所有上下文（双队列版本）
 
     The answers go with it. They are shown beside the transcript they answer,
     so leaving them behind after a clear would caption a conversation that is
     no longer on screen.
+
+    Asks first. This throws away a meeting that cannot be got back, and it
+    used to be one click on a button sitting between two harmless ones, with
+    nothing in between. It has no keyboard shortcut for the same reason: a
+    slip of the hand should not be able to reach it.
     """
+    if confirm and messagebox is not None:
+        lines = 0
+        try:
+            lines = sum(len(v) for v in
+                        transcriber.structured_transcript.values())
+        except Exception:
+            pass
+        detail = (f"{lines} turns will be discarded."
+                  if lines else "The transcript will be discarded.")
+        if not messagebox.askyesno(
+                "Clear the transcript?",
+                f"{detail}\n\nThis cannot be undone. Export first if you "
+                "want to keep it."):
+            return
     print("Clearing context...")
     if responder is not None:
         responder.answers.clear()
@@ -513,8 +659,13 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         "Case Detail": (case_detail_files, "case_detail"),
         "Knowledge Base": (knowledge_files, "knowledge")
     }
-    template_imports = {}
-    template_deletes = {}
+    # The import and delete actions, per category. They used to be a pair of
+    # 26px buttons beside every dropdown -- nine small controls in the corner
+    # of a window used during a meeting, for something done a handful of times
+    # ever. They live in the File menu now; these are what it calls.
+    template_importers = {}
+    template_removers = {}
+    template_editors = {}
 
     template_vars = {}
     template_menus = {}
@@ -537,11 +688,10 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
             width=160,
             height=dropdown_height,  # 新增这行
         )
-        # Leave room on the right for the import and delete buttons, which
-        # belong beside their own dropdown. They were briefly in column 1, on
-        # top of the action buttons -- small enough to still be clickable,
-        # which is how that survived being noticed.
-        menu.grid(row=row, column=0, padx=(80, 60), pady=1, sticky="e")
+        # The 60px that used to be held for the import and delete buttons is
+        # the dropdown's now: these names are long, and a truncated template
+        # name is worse than a narrow gap.
+        menu.grid(row=row, column=0, padx=(80, 5), pady=1, sticky="e")
         template_vars[setting_key] = var
         template_menus[setting_key] = menu
 
@@ -568,16 +718,14 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
                 target_var.set(name)          # selecting it applies it
             return do_import
 
-        import_button = ctk.CTkButton(
-            main_control_frame, text="+", width=26, height=dropdown_height,
-            command=make_importer(),
-            fg_color="#2B4C7E")
-        import_button.grid(row=row, column=0, padx=(0, 31), pady=1, sticky="e")
-        template_imports[setting_key] = import_button
+        template_importers[setting_key] = make_importer()
 
+        # By name, not "whichever is selected". The menu lists every template
+        # and acts on the one pointed at, which need not be the live one --
+        # and tidying up an old template should not mean selecting it first,
+        # since selecting it applies it.
         def make_remover(category=setting_key, target_menu=menu, target_var=var):
-            def do_delete():
-                name = target_var.get()
+            def do_delete(name):
                 if not messagebox.askyesno(
                         "Delete template",
                         f"Delete the {category.replace('_', ' ')} template "
@@ -589,15 +737,31 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
                     return
                 names = TemplateManager.get_template_files(category)
                 target_menu.configure(values=names or ["none"])
-                # Move off the deleted one, which applies the replacement.
-                target_var.set(names[0] if names else "none")
+                # Only move off it if it was the one in use; deleting some
+                # other template should not change which one is applied.
+                if target_var.get() == name:
+                    target_var.set(names[0] if names else "none")
             return do_delete
 
-        delete_button = ctk.CTkButton(
-            main_control_frame, text="\u2212", width=26, height=dropdown_height,
-            command=make_remover(), fg_color="#6B2737")
-        delete_button.grid(row=row, column=0, padx=(0, 5), pady=1, sticky="e")
-        template_deletes[setting_key] = delete_button
+        def make_editor(category=setting_key):
+            def do_edit(name):
+                path = TemplateManager.editable_copy(category, name)
+                if not path:
+                    messagebox.showwarning(
+                        "Cannot edit",
+                        f"Could not open {name!r} for editing.")
+                    return
+                # Handed to whatever the user opens this file type with,
+                # rather than a text box built into a meeting recorder.
+                try:
+                    subprocess.run(["open", path], check=True)
+                except Exception as e:
+                    messagebox.showwarning(
+                        "Cannot edit", f"Could not open {path}:\n{e}")
+            return do_edit
+
+        template_removers[setting_key] = make_remover()
+        template_editors[setting_key] = make_editor()
         row += 1
 
     template_hint = ctk.CTkLabel(
@@ -785,16 +949,14 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         messagebox.showwarning("Nothing to answer",
                                "That selection had no text in it.")
 
+    # What is left is what gets used while a meeting is running. Export and
+    # Clear happen at the end of one, and are in the File menu.
     buttons_data = [
-        ("Clear Transcript", lambda: clear_context(transcriber, mic_queue, speaker_queue, transcript_ui, responder), "#1f538d"),
         ("Answer Selection", answer_selection, "#7a4a1f"),
-        ("Export Conversation", export_responses, "#1B4332"),
         ("Pop Up", None, "#1B4332")
     ]
 
     # 创建按钮并保存引用
-    clear_transcript_button = None
-    export_button = None
     freeze_button = None
     
     for i, (text, command, color) in enumerate(buttons_data):
@@ -810,11 +972,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         btn.grid(row=i, column=1, padx=5, pady=1)
         
         # 保存按钮引用
-        if text == "Clear Transcript":
-            clear_transcript_button = btn
-        elif text == "Export Conversation":
-            export_button = btn
-        elif text == "Pop Up":
+        if text == "Pop Up":
             freeze_button = btn
 
     # Says how the button above is driven. Selecting text in a pane that has
@@ -1160,8 +1318,12 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
         "transcript_ui": transcript_ui,
         "response_textbox": response_textbox,
         "freeze_button": freeze_button,
-        "clear_transcript_button": clear_transcript_button,
-        "export_button": export_button,
+        # For the File menu, which is built once the rest of main() has the
+        # transcriber and responder it needs to clear.
+        "export_responses": export_responses,
+        "template_importers": template_importers,
+        "template_removers": template_removers,
+        "template_editors": template_editors,
         "profile_dropdown": profile_dropdown,
         "pause_dropdown": pause_dropdown,
     }
@@ -1519,7 +1681,6 @@ def main():
     transcript_ui = widgets["transcript_ui"]
     response_textbox = widgets["response_textbox"]
     freeze_button = widgets["freeze_button"]
-    clear_transcript_button = widgets["clear_transcript_button"]
 
 
     # 创建设置管理器实例
@@ -1588,10 +1749,15 @@ def main():
     root.grid_columnconfigure(0, weight=2)
     root.grid_columnconfigure(1, weight=3)
 
-    clear_transcript_button.configure(
-        command=lambda: clear_context(transcriber, mic_queue, speaker_queue,
-                                      transcript_ui, responder)
-    )
+    _build_menubar(
+        root,
+        on_export=widgets["export_responses"],
+        on_clear=lambda: clear_context(transcriber, mic_queue, speaker_queue,
+                                       transcript_ui, responder),
+        importers=widgets["template_importers"],
+        removers=widgets["template_removers"],
+        editors=widgets["template_editors"],
+        list_templates=TemplateManager.get_template_files)
     def show_popup():
         try:
             # 获取最新的话语内容
