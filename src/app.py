@@ -248,7 +248,8 @@ def _restore_on_exit(root):
     root.destroy()
 
 
-def _polish_with_progress(root, conversation_data, backend):
+def _polish_with_progress(root, conversation_data, backend,
+                          cli_command="claude"):
     """
     Clean the transcript on a worker thread, behind a progress window.
 
@@ -261,7 +262,7 @@ def _polish_with_progress(root, conversation_data, backend):
         from src.polish import polish_transcript, DEFAULT_BATCH_SIZE
         from src.export_dialog import run_with_progress
 
-        provider = _build_polish_provider(backend)
+        provider = _build_polish_provider(backend, cli_command)
         if provider is None:
             return "\n\nCleanup skipped: no language model available."
 
@@ -298,8 +299,13 @@ def _polish_with_progress(root, conversation_data, backend):
         return f"\n\nCleanup failed ({e}); the transcript was saved unchanged."
 
 
-def _build_polish_provider(backend):
-    """Build the provider for one cleanup run. 'cli' overrides conf.yaml."""
+def _build_polish_provider(backend, cli_command="claude"):
+    """
+    Build the provider for one cleanup run. 'cli' overrides conf.yaml.
+
+    `cli_command` is which agent CLI the user picked. It used to be whatever
+    conf.yaml said, so choosing Codex in the dialog still ran Claude.
+    """
     import yaml
     from src.llm import create_llm_provider
 
@@ -307,7 +313,9 @@ def _build_polish_provider(backend):
         llm_config = (yaml.safe_load(f) or {}).get("LLM", {})
 
     if backend == "cli":
-        return create_llm_provider("cli", dict(llm_config.get("cli", {})))
+        config = dict(llm_config.get("cli", {}))
+        config["command"] = cli_command
+        return create_llm_provider("cli", config)
 
     provider_type = LLMConfig.provider_for()
     if provider_type == "cli":
@@ -324,40 +332,6 @@ def _build_polish_provider(backend):
         if LLMConfig.get_model():
             config["model"] = LLMConfig.get_model()
     return create_llm_provider(provider_type, config)
-
-
-def _ask_polish_backend():
-    """
-    Ask whether to clean the transcript, and on what.
-
-    The two backends differ in ways the user is the only one who can weigh:
-    an API key is metered but fast, a subscription CLI is already paid for but
-    roughly three times slower and subject to its own rate limits. Measured on
-    an hour-long meeting: about 3 minutes against about 9.
-    """
-    if not messagebox.askyesno(
-            "Clean up transcript?",
-            "Run the transcript through a language model to fix "
-            "speech-recognition errors before saving?\n\n"
-            "The original wording of every line is kept either way; "
-            "corrections are stored alongside it."):
-        return None
-
-    from src.llm.cli_provider import CLIProvider
-    cli_available = CLIProvider(command="claude").validate_config()
-
-    if not cli_available:
-        return "config"
-
-    use_cli = messagebox.askyesno(
-        "Which model?",
-        "Use the Claude CLI on your existing subscription?\n\n"
-        "Yes  —  Claude CLI. No per-token cost, but slower: roughly "
-        "9 minutes for an hour-long meeting, and subject to your "
-        "subscription's rate limits.\n\n"
-        "No  —  the API configured in conf.yaml. Around 3 minutes for the "
-        "same meeting, billed per token.")
-    return "cli" if use_cli else "config"
 
 
 def _save_markdown(filepath, conversation_data, include_original):
@@ -833,7 +807,7 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
 
             choices = ExportDialog(
                 root, default_path,
-                cli_available=CLIProvider(command="claude").validate_config(),
+                cli_commands=CLIProvider.available(),
                 line_count=len([m for m in messages if (m.get("text") or "").strip()]),
                 speakers_found=len(found),
                 can_merge=any(m.get("embedding") for m in messages),
@@ -856,7 +830,8 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
                 if choices.backend == "cli" or ensure_key(
                         "Cleaning up the transcript asks a language model."):
                     cleanup_note = _polish_with_progress(
-                        root, conversation_data, choices.backend)
+                        root, conversation_data, choices.backend,
+                        choices.cli_command)
                 else:
                     cleanup_note = ("\n\nCleanup skipped: no key was given, "
                                     "so the transcript is unchanged.")
@@ -1218,11 +1193,20 @@ def create_ui_components(root, response_manager, transcriber, mic_queue,
     )
     mic_pause_checkbox.pack(side="left", padx=(0, 5))
 
-    # How many people are on the call. Voice embeddings drift with volume,
-    # codec and network conditions, so left to itself the clustering splits
-    # one person into several -- a real call produced 12 speakers, exactly the
-    # cap, for a handful of people. Given the real number it stops inventing.
-    people_values = ["auto"] + [str(i) for i in range(2, 13)]
+    # How many people are on the far end. The microphone track is separate
+    # and is not clustered, so this does not count the user.
+    #
+    # Voice embeddings drift with volume, codec and network conditions, so
+    # left to itself the clustering splits one person into several -- a real
+    # call produced 12 speakers, exactly the cap, for a handful of people.
+    # Given the real number it stops inventing.
+    #
+    # 1 is offered, and started at 2 for no reason anyone could name. It is
+    # the most useful setting of the lot: a one-to-one call is the commonest
+    # shape there is, and the one where over-splitting is most obvious -- a
+    # single support agent came back as S1 and S2. Both paths already handle
+    # it, the live cap and the offline re-clustering.
+    people_values = ["auto"] + [str(i) for i in range(1, 13)]
     saved_people = settings_manager.get_setting("speaker_count")
     people_var = ctk.StringVar(
         value=str(saved_people) if saved_people else "auto")

@@ -56,7 +56,11 @@ cd "$WORKDIR"
 # by Homebrew is therefore invisible, which is how a launcher that worked from
 # a terminal died on startup looking for ffmpeg. Both Homebrew prefixes, since
 # Apple Silicon and Intel differ.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+#
+# ~/.local/bin is here for the same reason and cost a second bug: it is where
+# `claude` installs by default, so the export dialog offered only the API and
+# greyed the CLI out on a machine where the CLI was installed and working.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 if [ ! -x "$PYTHON" ]; then
   osascript -e 'display alert "EchoAI Helper" message "The Python environment \

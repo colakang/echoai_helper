@@ -29,6 +29,7 @@ class ExportChoices:
     path: str
     polish: bool = False
     backend: str = "cli"          # "cli" | "api"
+    cli_command: str = "claude"   # which CLI, when backend is "cli"
     include_original: bool = False
     merge_speakers_to: int = 0    # 0 = leave the labels alone
 
@@ -40,7 +41,15 @@ class ExportChoices:
 class ExportDialog(ctk.CTkToplevel):
     """One panel: format, cleanup, backend, originals. Then Save."""
 
-    def __init__(self, parent, default_path: str, cli_available: bool = True,
+    # How each CLI is described. Anything installed but unnamed here still
+    # gets offered, under its own command name.
+    CLI_LABELS = {
+        "claude": "Claude CLI",
+        "codex": "Codex CLI",
+        "gemini": "Gemini CLI",
+    }
+
+    def __init__(self, parent, default_path: str, cli_commands=("claude",),
                  line_count: int = 0, speakers_found: int = 0,
                  can_merge: bool = False):
         super().__init__(parent)
@@ -51,15 +60,20 @@ class ExportDialog(ctk.CTkToplevel):
 
         self._result: Optional[ExportChoices] = None
         self._path = default_path
-        self._cli_available = cli_available
+        # Every agent CLI found on this machine, not just Claude. The dialog
+        # offered one hardcoded choice before, so an installed Codex was
+        # unreachable and an absent Claude left the API as the only option.
+        self._cli_commands = list(cli_commands or ())
         self._line_count = line_count
 
         self._speakers_found = speakers_found
         self._can_merge = can_merge
         self._merge = tk.BooleanVar(value=False)
-        self._merge_to = tk.StringVar(value=str(max(2, min(speakers_found, 4))))
+        self._merge_to = tk.StringVar(value=str(max(1, min(speakers_found, 4))))
         self._polish = tk.BooleanVar(value=False)
-        self._backend = tk.StringVar(value="cli" if cli_available else "api")
+        self._backend = tk.StringVar(
+            value=f"cli:{self._cli_commands[0]}" if self._cli_commands
+            else "api")
         self._originals = tk.BooleanVar(value=False)
 
         self._build()
@@ -102,10 +116,23 @@ class ExportDialog(ctk.CTkToplevel):
         self._backend_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._backend_frame.pack(fill="x", padx=44, pady=(0, 4))
 
-        self._cli_radio = ctk.CTkRadioButton(
-            self._backend_frame, text="Claude CLI  —  no per-token cost, slower",
-            variable=self._backend, value="cli", command=self._sync_estimate)
-        self._cli_radio.pack(anchor="w", pady=2)
+        self._cli_radios = []
+        for command in self._cli_commands:
+            label = self.CLI_LABELS.get(command, command)
+            radio = ctk.CTkRadioButton(
+                self._backend_frame,
+                text=f"{label}  \u2014  no per-token cost, slower",
+                variable=self._backend, value=f"cli:{command}",
+                command=self._sync_estimate)
+            radio.pack(anchor="w", pady=2)
+            self._cli_radios.append(radio)
+
+        if not self._cli_commands:
+            ctk.CTkLabel(
+                self._backend_frame,
+                text="No agent CLI found, so only the API is available.",
+                font=("Arial", 11), text_color="#8a8a8a",
+            ).pack(anchor="w", pady=2)
 
         self._api_radio = ctk.CTkRadioButton(
             self._backend_frame, text="API from conf.yaml  —  faster, billed per token",
@@ -137,7 +164,10 @@ class ExportDialog(ctk.CTkToplevel):
                 variable=self._merge).pack(side="left")
             ctk.CTkOptionMenu(
                 merge_row, variable=self._merge_to,
-                values=[str(i) for i in range(2, max(3, self._speakers_found))],
+                # From 1: the same omission as the live control had. Merging
+                # everything into one person is the whole answer when a
+                # single voice came back as three.
+                values=[str(i) for i in range(1, max(2, self._speakers_found))],
                 width=64).pack(side="left", padx=8)
             ctk.CTkLabel(merge_row, text="people",
                          font=("Arial", 12)).pack(side="left")
@@ -163,11 +193,8 @@ class ExportDialog(ctk.CTkToplevel):
         """Backend and originals only matter when cleanup is on."""
         on = self._polish.get()
         state = "normal" if on else "disabled"
-        for widget in (self._cli_radio, self._api_radio, self._originals_box):
+        for widget in (*self._cli_radios, self._api_radio, self._originals_box):
             widget.configure(state=state)
-        if not self._cli_available:
-            self._cli_radio.configure(state="disabled")
-            self._backend.set("api")
         colour = "#8a8a8a" if on else "#4a4a4a"
         self._originals_hint.configure(text_color=colour)
         self._sync_estimate()
@@ -176,8 +203,9 @@ class ExportDialog(ctk.CTkToplevel):
         if not self._polish.get() or not self._line_count:
             self._estimate.configure(text="")
             return
+        kind = "api" if self._backend.get() == "api" else "cli"
         self._estimate.configure(
-            text=f"Estimated {estimate_minutes(self._line_count, self._backend.get())}")
+            text=f"Estimated {estimate_minutes(self._line_count, kind)}")
 
     def _short_path(self) -> str:
         import os
@@ -199,10 +227,13 @@ class ExportDialog(ctk.CTkToplevel):
             self._path_label.configure(text=self._short_path())
 
     def _save(self) -> None:
+        chosen = self._backend.get()
         self._result = ExportChoices(
             path=self._path,
             polish=self._polish.get(),
-            backend=self._backend.get(),
+            backend="api" if chosen == "api" else "cli",
+            cli_command=(chosen.split(":", 1)[1] if chosen.startswith("cli:")
+                         else "claude"),
             include_original=self._originals.get() and self._polish.get(),
             merge_speakers_to=(int(self._merge_to.get())
                                if self._merge.get() else 0),
@@ -224,12 +255,17 @@ def estimate_minutes(lines: int, backend: str, batch_size: int = 25) -> str:
     """
     A rough figure, phrased as a range.
 
-    Measured per 25-line batch: 20-50s through the Claude CLI (the spread is
-    queueing upstream, not anything local) and 5-8s through the OpenAI API.
-    A single number here would be a lie in one direction or the other.
+    Measured per 25-line batch: 20-90s through an agent CLI and 5-8s through
+    the OpenAI API. A single number here would be a lie in one direction or
+    the other.
+
+    The CLI range was 20-50 and came from short batches. Over a real 229-line
+    meeting it ran 16-90s with a mean of 65, so the old figure under-promised
+    by roughly half -- and an estimate that reads "4 minutes" for an 11-minute
+    job is how a progress bar starts looking like a hang.
     """
     batches = max(1, (lines + batch_size - 1) // batch_size)
-    low, high = (20, 50) if backend == "cli" else (5, 8)
+    low, high = (20, 90) if backend == "cli" else (5, 8)
     lo_min = batches * low / 60
     hi_min = batches * high / 60
     if hi_min < 1:

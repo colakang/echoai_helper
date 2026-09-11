@@ -283,7 +283,7 @@ stopped: whatever finished is kept.
 | | Cost | Speed (measured) |
 |---|---|---|
 | **API** (`conf.yaml`) | per token | 5–8s per batch of lines |
-| **Claude CLI** | included in a subscription | 20–50s per batch |
+| **Agent CLI** (claude/codex/gemini) | included in a subscription | 20–90s per batch, mean 65 |
 
 Both are offered at export, and the dialog turns the per-batch figure into an
 estimate for the transcript in hand. The live reply suggestions always use the
