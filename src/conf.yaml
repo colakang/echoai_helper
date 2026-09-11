@@ -70,7 +70,12 @@ LLM:
   cli:
     command: "claude"    # claude | codex | gemini
     # model: "opus"      # optional, passed as --model
-    timeout: 90
+    # Measured over a 229-line meeting, 10 batches of 25: 16-90s per batch,
+    # mean 65. At 90 two batches hit the limit and were discarded -- a whole
+    # batch of work lost to a ceiling sitting just above the average. The
+    # cost of a generous timeout is waiting; the cost of a tight one is
+    # losing the batch, so this is not a symmetric trade.
+    timeout: 300
 
   # ----------------------------------------------------------------------------
   # OpenAI Configuration

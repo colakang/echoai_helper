@@ -13,7 +13,7 @@ def create_llm_provider(
     Factory function to create LLM provider instances.
 
     Args:
-        provider_type: Provider type ("openai" or "litellm")
+        provider_type: Provider type ("openai", "litellm" or "cli")
         config: Provider configuration dict
 
     Returns:
@@ -76,6 +76,29 @@ def create_llm_provider(
                 **{k: v for k, v in config.items()
                    if k not in ["model", "api_key", "api_base"]}
             )
+
+        elif provider_type == "cli":
+            # A local agent CLI -- claude, codex, gemini -- run once per
+            # request against a subscription the user already pays for.
+            #
+            # This branch was missing, so create_llm_provider("cli", ...)
+            # returned None and the export dialog's CLI backend could never
+            # run. It said "no language model available", which was untrue:
+            # the CLI was installed and working. Nothing caught it because a
+            # second bug greyed the option out before anyone could pick it.
+            from .cli_provider import CLIProvider
+
+            command = config.get("command", "claude")
+            if command not in CLIProvider.COMMANDS:
+                print(f"[Provider Factory] Unknown CLI {command!r}; known: "
+                      f"{', '.join(sorted(CLIProvider.COMMANDS))}")
+                return None
+
+            provider = CLIProvider(
+                command=command,
+                model=config.get("model"),
+                **{k: v for k, v in config.items()
+                   if k in ("timeout", "extra_args")})
 
         else:
             print(f"[Provider Factory] Unknown provider type: {provider_type}")

@@ -24,6 +24,7 @@ will not, and the CLI must be installed and already logged in -- there is no
 key to hand it.
 """
 
+import glob
 import json
 import os
 import shutil
@@ -64,6 +65,14 @@ class CLIProvider(LLMProvider):
         "codex": {
             "argv": ["codex", "exec", "--skip-git-repo-check"],
             "stdin": True,
+            # codex prints a session banner to stdout -- provider, sandbox,
+            # reasoning effort, session id -- and then the answer, so reading
+            # stdout gives a reply with several lines of preamble glued to the
+            # front. Every polish batch failed on it, because the cleanup
+            # expects exactly as many lines back as it sent.
+            #
+            # -o writes just the final message to a file. Nothing to parse.
+            "answer_file_flag": "--output-last-message",
         },
         "gemini": {
             "argv": ["gemini", "-p"],
@@ -88,9 +97,54 @@ class CLIProvider(LLMProvider):
         return "{}{}".format(self.command,
                              ":" + self.model if self.model else "")
 
+    # Where these CLIs actually install, for when PATH does not say.
+    #
+    # A double-clicked .app inherits /usr/bin:/bin:/usr/sbin:/sbin and nothing
+    # else -- no shell profile is read, so every one of these is invisible to
+    # shutil.which. That is not a corner case: `claude` installs to
+    # ~/.local/bin by default, which no GUI app has ever had on its PATH. The
+    # symptom was that the cleanup backend offered only the API, with the CLI
+    # greyed out, on a machine where the CLI was installed and working.
+    EXTRA_BIN_DIRS = (
+        "~/.local/bin",          # claude's own installer
+        "/opt/homebrew/bin",     # Homebrew, Apple silicon
+        "/usr/local/bin",        # Homebrew, Intel; npm -g default
+        "~/.npm-global/bin",     # npm with a user prefix
+        "~/bin",
+        "~/.bun/bin",
+        "~/.volta/bin",
+    )
+    # nvm puts one bin directory per installed node version.
+    NVM_GLOB = "~/.nvm/versions/node/*/bin"
+
+    @classmethod
+    def locate(cls, command: str) -> Optional[str]:
+        """Absolute path to `command`, or None. PATH first, then the usual places."""
+        found = shutil.which(command)
+        if found:
+            return found
+
+        directories = [os.path.expanduser(d) for d in cls.EXTRA_BIN_DIRS]
+        directories += sorted(glob.glob(os.path.expanduser(cls.NVM_GLOB)),
+                              reverse=True)          # newest node first
+        for directory in directories:
+            candidate = os.path.join(directory, command)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        return None
+
+    @classmethod
+    def available(cls) -> List[str]:
+        """Which of the known CLIs are installed, in COMMANDS order."""
+        return [name for name in cls.COMMANDS if cls.locate(name)]
+
+    def executable(self) -> Optional[str]:
+        return self.locate(self.command)
+
     def validate_config(self) -> bool:
-        if shutil.which(self.command) is None:
-            print("[CLIProvider] {!r} is not on PATH".format(self.command))
+        if self.locate(self.command) is None:
+            print("[CLIProvider] {!r} was not found on PATH or in {}".format(
+                self.command, ", ".join(self.EXTRA_BIN_DIRS)))
             return False
         return True
 
@@ -105,9 +159,16 @@ class CLIProvider(LLMProvider):
         contract is honoured by yielding a single chunk.
         """
         argv = list(self.COMMANDS[self.command]["argv"])
+        # argv[0] is the bare name; replace it with the resolved path, or the
+        # subprocess would fail for the same reason the lookup did.
+        resolved = self.locate(self.command)
+        if resolved:
+            argv[0] = resolved
         if self.model:
             argv += ["--model", self.model]
         argv += self.extra_args
+
+        answer_flag = self.COMMANDS[self.command].get("answer_file_flag")
 
         try:
             # Run from an empty directory. These CLIs read the working
@@ -116,6 +177,10 @@ class CLIProvider(LLMProvider):
             # about a transcript. Left in the project directory, an 8-line
             # batch took over 90s and timed out.
             with tempfile.TemporaryDirectory(prefix="echoai-llm-") as workdir:
+                answer_path = os.path.join(workdir, "answer.txt")
+                if answer_flag:
+                    argv += [answer_flag, answer_path]
+
                 completed = subprocess.run(
                     argv,
                     input=flatten(messages),
@@ -124,6 +189,25 @@ class CLIProvider(LLMProvider):
                     timeout=self.timeout,
                     cwd=workdir,
                 )
+
+                if completed.returncode != 0:
+                    detail = (completed.stderr or completed.stdout or "").strip()
+                    raise RuntimeError("{} failed: {}".format(
+                        self.command, detail[:400] or "no output"))
+
+                if answer_flag:
+                    try:
+                        with open(answer_path, encoding="utf-8") as f:
+                            raw = f.read()
+                    except OSError:
+                        # It ran and wrote nothing. stdout is the banner plus
+                        # the answer, which is worse than nothing here: a
+                        # batch built from it comes back the wrong length and
+                        # is discarded anyway.
+                        raise RuntimeError(
+                            "{} wrote no answer".format(self.command))
+                else:
+                    raw = completed.stdout
         except subprocess.TimeoutExpired:
             raise RuntimeError(
                 "{} did not answer within {}s".format(self.command, self.timeout))
@@ -131,12 +215,7 @@ class CLIProvider(LLMProvider):
             raise RuntimeError(
                 "{} is not installed or not on PATH".format(self.command))
 
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "").strip()
-            raise RuntimeError("{} failed: {}".format(
-                self.command, detail[:400] or "no output"))
-
-        answer = _clean(completed.stdout)
+        answer = _clean(raw)
         if answer:
             yield answer
 
